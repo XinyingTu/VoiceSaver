@@ -1,0 +1,55 @@
+{
+  "session_id": "voicesaver-daniel-0142",
+  "vertical": "moving_services",
+  "client_alias": "Daniel (represented by the VoiceSaver AI voice proxy)",
+  "spec_locked": false,
+  "ada_shield": {
+    "self_attested": false,
+    "active": false,
+    "attestation_prompt": "Enable this only if you (or the person you're representing) genuinely have a vocal, cognitive-processing, or hearing-related accessibility need. You are responsible for the truthfulness of this self-attestation; the system never infers or fabricates it."
+  },
+  "job_spec": {
+    "household_size": "2_bedroom",
+    "origin_zip": "29730",
+    "origin_label": "Rock Hill, SC",
+    "destination_zip": "28202",
+    "destination_label": "Charlotte, NC",
+    "distance_miles": 45,
+    "inventory_items": [
+      "queen bed + frame",
+      "2-seat sofa",
+      "4-person dining set",
+      "refrigerator",
+      "washer",
+      "28 packed boxes"
+    ],
+    "stair_flights": 2,
+    "source_intake_path": "document_intake"
+  },
+  "market_context": {
+    "scenario": "Daniel example — Rock Hill, SC to Charlotte, NC (45 mi, 2-bedroom).",
+    "citable_quote_range": {
+      "low": 1158,
+      "high": 6506,
+      "source": "Real quotes gathered for the Daniel example in the challenge brief."
+    },
+    "benchmark_reference": "average_2_bedroom_move_total in config/domain_config.json"
+  },
+  "documents": [
+    {
+      "type": "handwritten_quote_photo",
+      "source": "client_upload",
+      "reference": "daniel_prior_quote.jpg",
+      "parsed_by": "src/document_parser.py (one-shot vision call)",
+      "seeds_leverage": true,
+      "note": "An existing written quote Daniel already holds. Parsed via the vision path into the same schema and logged as verifiable competitor leverage ($1,850, itemized) for later calls."
+    },
+    {
+      "type": "inventory_photos",
+      "source": "client_upload",
+      "reference": "daniel_inventory.zip",
+      "count": 9,
+      "note": "Confirms exact inventory. The agent never overstates or understates it."
+    }
+  ]
+}

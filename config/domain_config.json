@@ -1,67 +1,40 @@
 {
-  "domain": "residential_moving_services",
-  "currency": "USD",
-  "description": "Taxonomy, price benchmarks, and risk thresholds for the moving-services negotiation market.",
-  "taxonomy": {
-    "household_size": {
-      "label": "Household size",
-      "options": ["studio", "1_bedroom", "2_bedroom", "3_bedroom", "4_bedroom_plus"],
-      "description": "Approximate volume driver for the move."
-    },
-    "origin_zip": {
-      "label": "Origin ZIP",
-      "description": "Pickup postal code, drives labor market rate and distance."
-    },
-    "destination_zip": {
-      "label": "Destination ZIP",
-      "description": "Drop-off postal code, drives distance and fuel."
-    },
-    "inventory_items": {
-      "label": "Inventory items",
-      "description": "Named heavy/bulky items that add crew time and risk surcharges.",
-      "type": "list"
-    },
-    "stair_flights": {
-      "label": "Stair flights",
-      "description": "Total flights of stairs across origin and destination (no elevator).",
-      "type": "integer"
-    }
+  "vertical": "moving_services",
+  "benchmarks": {
+    "base_rate_per_mile": 15.0,
+    "average_2_bedroom_move_total": 2200.0,
+    "red_flag_discount_threshold": 0.3
   },
-  "price_benchmarks": {
-    "base_by_household_size": {
-      "studio": 650,
-      "1_bedroom": 950,
-      "2_bedroom": 1450,
-      "3_bedroom": 2050,
-      "4_bedroom_plus": 2850
+  "job_spec_taxonomy": [
+    "household_size",
+    "origin_zip",
+    "destination_zip",
+    "inventory_items",
+    "stair_flights"
+  ],
+  "fee_line_items": [
+    "base_labor_fee",
+    "mileage_fee",
+    "stair_carry_fee",
+    "long_carry_fee",
+    "packing_materials_fee",
+    "fuel_surcharge"
+  ],
+  "_extended": {
+    "note": "Vendor-agnostic computation params used by negotiation_tools.py to (a) derive a job-specific benchmark and (b) decompose any quoted total into fee_line_items. Switching verticals still only requires swapping this file.",
+    "household_size_multiplier": {
+      "studio": 0.55,
+      "1_bedroom": 0.75,
+      "2_bedroom": 1.0,
+      "3_bedroom": 1.45,
+      "4_bedroom_plus": 1.95
     },
-    "per_inventory_item": 120,
-    "per_stair_flight": 85,
-    "per_mile": 2.15,
-    "special_item_surcharge": {
-      "piano": 350,
-      "gun_safe": 300,
-      "pool_table": 275,
-      "commercial_refrigerator": 220,
-      "aquarium": 180
+    "line_item_rates": {
+      "stair_carry_fee_per_flight": 40.0,
+      "long_carry_fee_flat": 0.0,
+      "packing_materials_fee_flat": 100.0,
+      "fuel_surcharge_pct_of_transport": 0.08
     },
-    "fair_market_band": {
-      "low_multiplier": 0.9,
-      "high_multiplier": 1.15,
-      "description": "A fair binding quote is expected to fall within [low, high] * computed_benchmark."
-    }
-  },
-  "risk_controls": {
-    "red_flag_discount_threshold": 0.30,
-    "red_flag_description": "If a mover drops more than 30% from its own opening quote, treat the opener as a padded lowball / bait price and flag it for the buyer.",
-    "minimum_binding_notice": "Any quote given verbally must be confirmable as a written binding estimate before it counts as competitive leverage."
-  },
-  "negotiation_rules": {
-    "max_turns": 4,
-    "leverage_source": "verified_competitor_binding_quote",
-    "buyer_walkaway_enabled": true,
-    "buyer_must_disclose_ai": true,
-    "buyer_may_fabricate_bids": false,
-    "buyer_may_misstate_inventory": false
+    "fmcsa_lowball_note": "FMCSA consumer guidance warns that quotes far below market are a leading indicator of hostage-load / bait-and-switch fraud; a 30%+ discount vs benchmark is treated as a Lowball Fraud Risk."
   }
 }

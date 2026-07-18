@@ -1,96 +1,158 @@
 """
-FastAPI backend for The Negotiator control center.
+FastAPI backend for VoiceSaver — the Universal Automated Negotiation Cockpit.
 
-Feeds the frontend everything it needs over clean REST endpoints:
-  * the structured job intake + document overview (left column),
-  * the simulated negotiation result with the full line-by-line transcript and
-    step-by-step price drops (middle + right columns),
-  * a live Server-Sent-Events stream of the transcript for the typewriter,
-  * the mocked ElevenLabs highlight audio asset (right-column Play button).
+Serves the frontend AND exposes the four negotiation tools as REAL, live
+function-calling webhooks that an ElevenLabs Conversational Agent can invoke
+during a call (/api/tools/*). Also provides: the lockable job spec, the ordered
+simulated session, the Closing Ledger report, the document-intake vision call,
+the ElevenLabs agent config, and the (labeled, simulated) playback audio.
 
 Run:  uvicorn src.server:app --reload --port 8000
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
+import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
-from .audio_generator import AUDIO_DIR, extract_highlight, generate_highlight_audio
-from .negotiation_engine import (
-    load_domain_config,
-    load_job,
-    load_profiles,
-    run_negotiation,
-)
+from . import counterparty_channel as channel
+from . import document_parser
+from . import negotiation_tools as T
+from .audio_generator import AUDIO_DIR, generate_all
+from .config_loader import get_profile, load_domain_config, load_job_spec, load_profiles
+from .negotiator_agent import build_agent_config, run_session
+from .report_builder import build_report
 
 app = FastAPI(
-    title="The Negotiator — Control Center API",
-    description="Simulated agent-to-agent moving-services negotiation market.",
-    version="1.0.0",
+    title="VoiceSaver — Automated Negotiation Cockpit API",
+    description="Live tool webhooks + simulated market + Closing Ledger for the moving-services vertical.",
+    version="2.0.0",
 )
 
-# Vite dev server + common local origins.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:4173",
-        "http://127.0.0.1:4173",
+        "http://localhost:5173", "http://127.0.0.1:5173",
+        "http://localhost:4173", "http://127.0.0.1:4173",
     ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-def _public_profile(profile: dict[str, Any]) -> dict[str, Any]:
-    """Return the frontend-safe subset of a profile (hide raw line templates)."""
+# --------------------------------------------------------------------------- #
+# Minimal server state (the spec-lock guardrail is enforced in the UI; we mirror
+# it here so /api/session/run can refuse to run against an unlocked spec).
+# --------------------------------------------------------------------------- #
+
+
+class _State:
+    def __init__(self) -> None:
+        base = load_job_spec()
+        self.job_spec: dict[str, Any] = base["job_spec"]
+        self.session_id: str = base["session_id"]
+        self.spec_locked: bool = False
+        self.ada_self_attested: bool = False
+
+
+STATE = _State()
+
+
+def _public_profile(p: dict[str, Any]) -> dict[str, Any]:
     return {
-        "id": profile["id"],
-        "name": profile["name"],
-        "archetype": profile["archetype"],
-        "company": profile["company"],
-        "voice_id": profile["voice_id"],
-        "personality": profile["personality"],
-        "tactics": profile["tactics"],
-        "walkaway_sensitivity": profile["mechanics"]["walkaway_sensitivity"],
-        "requires_binding_verification": profile["mechanics"]["requires_binding_verification"],
+        "id": p["id"], "name": p["name"], "style": p["style"],
+        "initial_price": p["initial_price"], "flexibility_score": p["flexibility_score"],
+        "blocks_automated_callers": p["_sim"].get("blocks_automated_callers", False),
+        "expected_outcome": p["_sim"].get("expected_outcome"),
     }
 
 
 def _require_profile(profile_id: str) -> dict[str, Any]:
-    profile = next((p for p in load_profiles() if p["id"] == profile_id), None)
-    if profile is None:
-        raise HTTPException(status_code=404, detail=f"Unknown profile '{profile_id}'.")
-    return profile
+    try:
+        return get_profile(profile_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 # --------------------------------------------------------------------------- #
-# Read endpoints
+# Request models
+# --------------------------------------------------------------------------- #
+
+
+class LockSpecBody(BaseModel):
+    job_spec: Optional[dict[str, Any]] = None
+    ada_self_attested: bool = False
+
+
+class RunSessionBody(BaseModel):
+    session_id: Optional[str] = None
+    ada_by_profile: Optional[dict[str, bool]] = None
+    counterparty_mode: str = "simulated"
+    require_lock: bool = True
+
+
+class BenchmarkBody(BaseModel):
+    vertical: str = "moving_services"
+    job_spec: dict[str, Any]
+
+
+class LogQuoteBody(BaseModel):
+    session_id: str
+    quote: dict[str, Any]
+
+
+class LowballBody(BaseModel):
+    quote_total: float
+    benchmark_total: Optional[float] = None
+    job_spec: Optional[dict[str, Any]] = None
+
+
+class ClassifyBody(BaseModel):
+    transcript_so_far: str = ""
+    signals: Optional[dict[str, Any]] = None
+
+
+# --------------------------------------------------------------------------- #
+# Intake / spec-lock
 # --------------------------------------------------------------------------- #
 
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
-    return {"status": "ok", "service": "the-negotiator", "profiles": [p["id"] for p in load_profiles()]}
+    return {"status": "ok", "service": "voicesaver", "spec_locked": STATE.spec_locked,
+            "profiles": [p["id"] for p in load_profiles()]}
 
 
-@app.get("/api/job")
-def job() -> dict[str, Any]:
-    """Structured job criteria + document intake overview (left column)."""
-    return load_job()
+@app.get("/api/job_spec")
+def job_spec() -> dict[str, Any]:
+    base = load_job_spec()
+    base["spec_locked"] = STATE.spec_locked
+    base["job_spec"] = STATE.job_spec
+    base["ada_shield"]["self_attested"] = STATE.ada_self_attested
+    base["ada_shield"]["active"] = STATE.ada_self_attested
+    return base
 
 
-@app.get("/api/domain")
-def domain() -> dict[str, Any]:
-    return load_domain_config()
+@app.post("/api/job_spec/lock")
+def lock_spec(body: LockSpecBody) -> dict[str, Any]:
+    if body.job_spec:
+        STATE.job_spec = body.job_spec
+    STATE.ada_self_attested = bool(body.ada_self_attested)
+    STATE.spec_locked = True
+    return {"spec_locked": True, "job_spec": STATE.job_spec,
+            "ada_shield": {"self_attested": STATE.ada_self_attested, "active": STATE.ada_self_attested}}
+
+
+@app.post("/api/job_spec/unlock")
+def unlock_spec() -> dict[str, Any]:
+    STATE.spec_locked = False
+    return {"spec_locked": False}
 
 
 @app.get("/api/profiles")
@@ -98,70 +160,148 @@ def profiles() -> dict[str, Any]:
     return {"profiles": [_public_profile(p) for p in load_profiles()]}
 
 
-@app.get("/api/negotiation/{profile_id}")
-def negotiation(profile_id: str) -> dict[str, Any]:
-    """Full simulated negotiation: transcript, price timeline, outcome, audio ref."""
+@app.get("/api/counterparty/modes")
+def counterparty_modes() -> dict[str, Any]:
+    return {"modes": channel.list_modes()}
+
+
+@app.get("/api/domain")
+def domain() -> dict[str, Any]:
+    return load_domain_config()
+
+
+# --------------------------------------------------------------------------- #
+# Document intake (REAL one-shot vision call)
+# --------------------------------------------------------------------------- #
+
+
+@app.post("/api/intake/vision")
+async def intake_vision(
+    file: UploadFile = File(...),
+    allow_demo_fallback: bool = Query(False),
+) -> dict[str, Any]:
+    """Run the real vision extraction on an uploaded document image."""
+    suffix = Path(file.filename or "upload.jpg").suffix or ".jpg"
+    with tempfile.NamedTemporaryFile(delete=True, suffix=suffix) as tmp:
+        tmp.write(await file.read())
+        tmp.flush()
+        try:
+            return document_parser.parse_document(tmp.name)
+        except RuntimeError as exc:
+            if allow_demo_fallback:
+                fixture = document_parser.demo_fixture()
+                fixture["_note"] = f"Vision call unavailable ({exc}); returned labeled demo fixture."
+                return fixture
+            raise HTTPException(status_code=400, detail=str(exc))
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/intake/demo")
+def intake_demo() -> dict[str, Any]:
+    return document_parser.demo_fixture()
+
+
+# --------------------------------------------------------------------------- #
+# Agent config + live tool webhooks (the real function-calling surface)
+# --------------------------------------------------------------------------- #
+
+
+@app.get("/api/agent/config")
+def agent_config(ada_shield_active: bool = Query(False)) -> dict[str, Any]:
+    return build_agent_config(session_id=STATE.session_id, ada_shield_active=ada_shield_active, job_spec=STATE.job_spec)
+
+
+@app.post("/api/tools/get_price_benchmark")
+def tool_get_price_benchmark(body: BenchmarkBody) -> dict[str, Any]:
+    return T.get_price_benchmark(body.vertical, body.job_spec)
+
+
+@app.post("/api/tools/log_competitor_quote")
+def tool_log_competitor_quote(body: LogQuoteBody) -> dict[str, Any]:
+    try:
+        return T.log_competitor_quote(body.session_id, body.quote)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.post("/api/tools/check_lowball_flag")
+def tool_check_lowball_flag(body: LowballBody) -> dict[str, Any]:
+    try:
+        return T.check_lowball_flag(body.quote_total, benchmark_total=body.benchmark_total, job_spec=body.job_spec)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.post("/api/tools/classify_outcome")
+def tool_classify_outcome(body: ClassifyBody) -> dict[str, Any]:
+    return T.classify_outcome(body.transcript_so_far, signals=body.signals)
+
+
+@app.get("/api/tools/logged_quotes/{session_id}")
+def tool_logged_quotes(session_id: str) -> dict[str, Any]:
+    return {"session_id": session_id, "logged_quotes": T.get_logged_quotes(session_id)}
+
+
+# --------------------------------------------------------------------------- #
+# Session run + report
+# --------------------------------------------------------------------------- #
+
+
+@app.post("/api/session/run")
+def session_run(body: RunSessionBody) -> dict[str, Any]:
+    if body.require_lock and not STATE.spec_locked:
+        raise HTTPException(status_code=409, detail="Spec is not locked. Lock the job spec before launching calls.")
+    if body.counterparty_mode != "simulated":
+        raise HTTPException(status_code=400,
+                            detail=f"counterparty_mode '{body.counterparty_mode}' needs external credentials; only 'simulated' runs locally.")
+    ada = body.ada_by_profile
+    if ada is None and STATE.ada_self_attested:
+        ada = {"mover_002_tough": True}
+    session = run_session(session_id=body.session_id or STATE.session_id, ada_by_profile=ada, job_spec=STATE.job_spec)
+    report = build_report(session)
+    return {"session": session, "report": report}
+
+
+@app.get("/api/session/demo")
+def session_demo() -> dict[str, Any]:
+    """Convenience: run the default ordered demo session (no lock required)."""
+    session = run_session(session_id=STATE.session_id, ada_by_profile={"mover_002_tough": True})
+    return {"session": session, "report": build_report(session)}
+
+
+@app.get("/api/session/transcript/{profile_id}")
+def session_transcript(profile_id: str) -> dict[str, Any]:
     _require_profile(profile_id)
-    result = run_negotiation(profile_id)
-    result["highlight"] = extract_highlight(result)
-    result["audio_url"] = f"/api/audio/{profile_id}"
-    return result
-
-
-@app.get("/api/negotiation/{profile_id}/stream")
-async def negotiation_stream(profile_id: str) -> StreamingResponse:
-    """
-    Server-Sent-Events stream of the transcript, one message at a time, so a
-    client can render it live. Each `data:` frame is a transcript message; a
-    final `event: done` frame carries the outcome summary.
-    """
-    _require_profile(profile_id)
-    result = run_negotiation(profile_id)
-
-    async def event_source():
-        for message in result["transcript"]:
-            yield f"data: {json.dumps(message)}\n\n"
-            # Movers pause a beat longer for dramatic effect.
-            await asyncio.sleep(0.9 if message["role"] == "mover" else 0.6)
-        summary = {
-            "final_price": result["final_price"],
-            "opening_price": result["opening_price"],
-            "anchor_price": result["anchor_price"],
-            "savings": result["savings"],
-            "savings_pct": result["savings_pct"],
-            "success": result["success"],
-            "red_flag": result["red_flag"],
-            "red_flag_reason": result["red_flag_reason"],
-            "breakthrough_turn": result["breakthrough_turn"],
-            "audio_url": f"/api/audio/{profile_id}",
-        }
-        yield f"event: done\ndata: {json.dumps(summary)}\n\n"
-
-    return StreamingResponse(event_source(), media_type="text/event-stream")
+    session = run_session(session_id=STATE.session_id, ada_by_profile={"mover_002_tough": True})
+    call = next((c for c in session["calls"] if c["profile"]["id"] == profile_id), None)
+    if not call:
+        raise HTTPException(status_code=404, detail="No call for that profile in the session.")
+    return {"profile_id": profile_id, "outcome": call["outcome"], "transcript": call["transcript"]}
 
 
 @app.get("/api/audio/{profile_id}")
 def audio(profile_id: str) -> FileResponse:
-    """Serve the mocked ElevenLabs highlight WAV, generating it on demand."""
+    """Serve the LABELED simulated playback WAV (not a real recording)."""
     _require_profile(profile_id)
-    path: Path = AUDIO_DIR / f"highlight_{profile_id}.wav"
+    path: Path = AUDIO_DIR / f"sim_playback_{profile_id}.wav"
     if not path.exists():
-        generate_highlight_audio(profile_id, mirror_to_frontend=False)
+        generate_all()
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Audio not available.")
     return FileResponse(path, media_type="audio/wav", filename=path.name)
 
 
 @app.get("/")
 def root() -> dict[str, Any]:
     return {
-        "service": "The Negotiator — Control Center API",
+        "service": "VoiceSaver — Automated Negotiation Cockpit API",
         "docs": "/docs",
+        "tools": [t["webhook"]["path"] for t in build_agent_config()["tools"]],
         "endpoints": [
-            "/api/health",
-            "/api/job",
-            "/api/domain",
-            "/api/profiles",
-            "/api/negotiation/{profile_id}",
-            "/api/negotiation/{profile_id}/stream",
+            "/api/health", "/api/job_spec", "/api/job_spec/lock", "/api/profiles",
+            "/api/counterparty/modes", "/api/intake/vision", "/api/intake/demo",
+            "/api/agent/config", "/api/session/run", "/api/session/demo",
             "/api/audio/{profile_id}",
         ],
     }

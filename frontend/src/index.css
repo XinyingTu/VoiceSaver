@@ -14,47 +14,75 @@ body,
 
 body {
   margin: 0;
-  background-color: theme("colors.void");
-  color: #e2e8f0;
-  font-family: theme("fontFamily.mono");
+  background-color: theme("colors.surface");
+  color: theme("colors.body");
+  font-family: theme("fontFamily.sans");
+  font-size: 16px;
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
 }
 
-/* Cyberpunk grid + vignette backdrop */
-.cockpit-bg {
-  background-color: theme("colors.void");
-  background-image:
-    radial-gradient(circle at 20% 0%, rgba(34, 211, 238, 0.08), transparent 40%),
-    radial-gradient(circle at 85% 100%, rgba(240, 51, 141, 0.08), transparent 45%),
-    linear-gradient(rgba(34, 211, 238, 0.04) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(34, 211, 238, 0.04) 1px, transparent 1px);
-  background-size: 100% 100%, 100% 100%, 40px 40px, 40px 40px;
+/* Respect user + app motion-reduction: kill all animation/transition. */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+.reduce-motion * {
+  animation: none !important;
+  transition: none !important;
 }
 
 @layer components {
   .panel {
-    @apply relative rounded-2xl border border-paneledge/80 bg-panel/80 shadow-panel backdrop-blur-sm;
+    @apply rounded-xl border border-edge bg-panel;
   }
-  .panel-title {
-    @apply flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.22em] text-cyan-glow/80;
+  .label {
+    @apply text-[11px] font-semibold uppercase tracking-[0.14em] text-muted;
   }
-  .chip {
-    @apply inline-flex items-center gap-1 rounded-md border border-paneledge bg-void/60 px-2 py-1 text-[11px] text-slate-300;
+  .field {
+    @apply w-full rounded-md border border-edge bg-panel2 px-3 py-2 text-base text-body
+      outline-none focus:border-info focus:ring-2 focus:ring-info/40;
   }
-  .neon-text {
-    text-shadow: 0 0 8px rgba(34, 211, 238, 0.6);
+  .field:disabled {
+    @apply cursor-not-allowed opacity-70;
   }
-  .magenta-text {
-    text-shadow: 0 0 10px rgba(240, 51, 141, 0.7);
+  /* Every status pill pairs an icon + text label; color is never the only channel. */
+  .badge {
+    @apply inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[12px] font-semibold;
+  }
+  .badge-success {
+    @apply border-success/60 bg-success/10 text-success;
+  }
+  .badge-danger {
+    @apply border-danger/70 bg-danger/10 text-danger;
+  }
+  .badge-access {
+    @apply border-access/70 bg-access/10 text-access;
+  }
+  .badge-neutral {
+    @apply border-edge bg-panel2 text-muted;
+  }
+  .btn-primary {
+    @apply rounded-lg border border-success/70 bg-success/15 px-4 py-2.5 text-base font-bold text-body
+      transition hover:bg-success/25 focus:outline-none focus:ring-2 focus:ring-success/50;
+  }
+  .btn-primary:disabled {
+    @apply cursor-not-allowed border-edge bg-panel2 text-muted opacity-70 hover:bg-panel2;
+  }
+  .btn-ghost {
+    @apply rounded-md border border-edge bg-panel2 px-3 py-1.5 text-[14px] text-body
+      transition hover:border-info focus:outline-none focus:ring-2 focus:ring-info/40;
   }
 }
 
-/* Blinking typewriter caret */
+/* Terminal transcript caret */
 .caret::after {
   content: "▌";
   margin-left: 1px;
+  color: theme("colors.info");
   animation: caretblink 1s steps(1) infinite;
-  color: theme("colors.cyan.glow");
 }
 @keyframes caretblink {
   50% {
@@ -62,37 +90,26 @@ body {
   }
 }
 
-/* Thin custom scrollbar for the transcript */
 .scroll-thin::-webkit-scrollbar {
-  width: 6px;
+  width: 8px;
 }
 .scroll-thin::-webkit-scrollbar-thumb {
-  background: rgba(34, 211, 238, 0.25);
+  background: theme("colors.edge");
   border-radius: 999px;
 }
 .scroll-thin::-webkit-scrollbar-track {
   background: transparent;
 }
 
-/* Scanline sweep overlay */
-.scanline {
-  pointer-events: none;
+/* Visually-hidden helper for extra screen-reader context */
+.sr-only {
   position: absolute;
-  inset: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
   overflow: hidden;
-  border-radius: inherit;
-}
-.scanline::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 40%;
-  background: linear-gradient(
-    to bottom,
-    transparent,
-    rgba(34, 211, 238, 0.06),
-    transparent
-  );
-  animation: scan 6s linear infinite;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }

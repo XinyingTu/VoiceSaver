@@ -1,26 +1,50 @@
-// Thin API client for the FastAPI backend.
+// API client for the VoiceSaver FastAPI backend.
 export const API_BASE =
   import.meta.env.VITE_API_BASE?.replace(/\/$/, "") || "http://localhost:8000";
 
-async function getJSON(path) {
-  const res = await fetch(`${API_BASE}${path}`);
+async function req(path, options) {
+  const res = await fetch(`${API_BASE}${path}`, options);
   if (!res.ok) {
-    throw new Error(`${path} -> ${res.status} ${res.statusText}`);
+    let detail = `${res.status} ${res.statusText}`;
+    try {
+      const body = await res.json();
+      if (body.detail) detail = body.detail;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(detail);
   }
   return res.json();
 }
 
-export const fetchJob = () => getJSON("/api/job");
-export const fetchProfiles = () => getJSON("/api/profiles");
-export const fetchNegotiation = (profileId) =>
-  getJSON(`/api/negotiation/${profileId}`);
+const jsonPost = (path, body) =>
+  req(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
 
-// Prefer the statically-served mirror in /public/audio so playback works even
-// if the API host differs; fall back to the API audio route.
-export const audioUrlFor = (profileId, apiAudioUrl) => {
-  const local = `/audio/highlight_${profileId}.wav`;
-  return { local, remote: apiAudioUrl ? `${API_BASE}${apiAudioUrl}` : local };
+export const fetchJobSpec = () => req("/api/job_spec");
+export const fetchProfiles = () => req("/api/profiles");
+export const fetchCounterpartyModes = () => req("/api/counterparty/modes");
+export const fetchIntakeDemo = () => req("/api/intake/demo");
+
+export const lockSpec = (jobSpec, adaSelfAttested) =>
+  jsonPost("/api/job_spec/lock", { job_spec: jobSpec, ada_self_attested: adaSelfAttested });
+
+export const runSession = (body) => jsonPost("/api/session/run", body);
+
+export const uploadVision = async (file, allowDemoFallback = false) => {
+  const form = new FormData();
+  form.append("file", file);
+  return req(`/api/intake/vision?allow_demo_fallback=${allowDemoFallback}`, {
+    method: "POST",
+    body: form,
+  });
 };
 
-export const formatMoney = (value) =>
-  value == null ? "—" : `$${Math.round(value).toLocaleString("en-US")}`;
+export const audioUrl = (profileId) => `${API_BASE}/api/audio/${profileId}`;
+export const transcriptUrl = (profileId) => `${API_BASE}/api/session/transcript/${profileId}`;
+
+export const money = (v) =>
+  v == null ? "—" : `$${Math.round(v).toLocaleString("en-US")}`;
