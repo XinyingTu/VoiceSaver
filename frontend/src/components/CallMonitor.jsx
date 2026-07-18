@@ -23,7 +23,10 @@ function Line({ item, typing }) {
   const who = isDispatcher ? item.callName : "VoiceSaver Proxy";
   const accent = isDispatcher ? "text-access" : "text-info";
   return (
-    <div className={`rounded-lg border border-edge bg-panel2 px-3 py-2 ${item.animate ? "animate-risein" : ""}`}>
+    <div
+      data-testid={typing ? "tx-typing" : "tx-line"}
+      className={`rounded-lg border border-edge bg-panel2 px-3 py-2 ${item.animate ? "animate-risein" : ""}`}
+    >
       <div className="mb-1 flex items-center justify-between gap-2">
         <span className={`text-[12px] font-bold ${accent}`}>
           {who} <span className="text-muted">· {isDispatcher ? "DISPATCHER" : "PROXY"}</span>

@@ -68,7 +68,7 @@ export default function LedgerCard({ card }) {
   const itemized = card.outcome === "ITEMIZED_QUOTE";
 
   return (
-    <article className="rounded-lg border border-edge bg-panel2 p-3">
+    <article data-testid="ledger-card" className="rounded-lg border border-edge bg-panel2 p-3">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="flex items-center gap-2">

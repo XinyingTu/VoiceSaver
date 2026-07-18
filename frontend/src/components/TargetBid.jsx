@@ -3,7 +3,13 @@ import { useAnimatedNumber } from "../hooks/useAnimatedNumber.js";
 import { money } from "../api.js";
 
 export default function TargetBid({ currentBid, priceDropSeq, benchmark, report, status }) {
-  const display = useAnimatedNumber(currentBid ?? 0, 750);
+  const savings = report?.savings_summary;
+  const done = status === "done";
+  // While live, track the number on the table. At done, settle on the best
+  // itemized quote secured (the last call may be a decline that would otherwise
+  // freeze this counter on a rejected price).
+  const headlineNumber = done && savings ? savings.recommended_total : currentBid;
+  const display = useAnimatedNumber(headlineNumber ?? 0, 750);
   const [flash, setFlash] = useState(false);
 
   // Brief highlight each time a concession tumbles the number.
@@ -15,27 +21,32 @@ export default function TargetBid({ currentBid, priceDropSeq, benchmark, report,
     }
   }, [priceDropSeq]);
 
-  const savings = report?.savings_summary;
-
   return (
     <section className="panel p-4" aria-label="Live savings counter">
       <h2 className="label mb-3">Live Savings Counter</h2>
 
       <div
         className={`rounded-lg border p-4 text-center transition-colors ${
-          flash ? "border-success bg-success/10" : "border-edge bg-surface"
+          flash || done ? "border-success bg-success/10" : "border-edge bg-surface"
         }`}
       >
-        <div className="label">Current Target Bid</div>
+        <div className="label">{done ? "Final Secured Bid" : "Current Target Bid"}</div>
         <div
-          className={`font-mono text-5xl font-black tabular-nums ${flash ? "animate-tumble text-success" : "text-body"}`}
+          data-testid="target-bid"
+          className={`font-mono text-5xl font-black tabular-nums ${
+            flash ? "animate-tumble text-success" : done ? "text-success" : "text-body"
+          }`}
           role="status"
           aria-live="polite"
         >
-          {currentBid != null ? money(display) : "—"}
+          {headlineNumber != null ? money(display) : "—"}
         </div>
         <div className="mt-1 text-[13px] text-muted">
-          {status === "running" ? "Tracking the live number on the table" : "Awaiting live negotiation"}
+          {done
+            ? "Best itemized quote secured"
+            : status === "running"
+            ? "Tracking the live number on the table"
+            : "Awaiting live negotiation"}
         </div>
       </div>
 
