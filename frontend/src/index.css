@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: theme("colors.void");
+  color: #e2e8f0;
+  font-family: theme("fontFamily.mono");
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Cyberpunk grid + vignette backdrop */
+.cockpit-bg {
+  background-color: theme("colors.void");
+  background-image:
+    radial-gradient(circle at 20% 0%, rgba(34, 211, 238, 0.08), transparent 40%),
+    radial-gradient(circle at 85% 100%, rgba(240, 51, 141, 0.08), transparent 45%),
+    linear-gradient(rgba(34, 211, 238, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(34, 211, 238, 0.04) 1px, transparent 1px);
+  background-size: 100% 100%, 100% 100%, 40px 40px, 40px 40px;
+}
+
+@layer components {
+  .panel {
+    @apply relative rounded-2xl border border-paneledge/80 bg-panel/80 shadow-panel backdrop-blur-sm;
+  }
+  .panel-title {
+    @apply flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.22em] text-cyan-glow/80;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-md border border-paneledge bg-void/60 px-2 py-1 text-[11px] text-slate-300;
+  }
+  .neon-text {
+    text-shadow: 0 0 8px rgba(34, 211, 238, 0.6);
+  }
+  .magenta-text {
+    text-shadow: 0 0 10px rgba(240, 51, 141, 0.7);
+  }
+}
+
+/* Blinking typewriter caret */
+.caret::after {
+  content: "▌";
+  margin-left: 1px;
+  animation: caretblink 1s steps(1) infinite;
+  color: theme("colors.cyan.glow");
+}
+@keyframes caretblink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* Thin custom scrollbar for the transcript */
+.scroll-thin::-webkit-scrollbar {
+  width: 6px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: rgba(34, 211, 238, 0.25);
+  border-radius: 999px;
+}
+.scroll-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Scanline sweep overlay */
+.scanline {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+}
+.scanline::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 40%;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    rgba(34, 211, 238, 0.06),
+    transparent
+  );
+  animation: scan 6s linear infinite;
+}
