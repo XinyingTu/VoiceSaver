@@ -224,7 +224,7 @@ export default function App() {
         />
 
         {humanWidget ? (
-          <HumanWidget info={humanWidget} />
+          <HumanWidget info={humanWidget} ada={ada} />
         ) : (
           <CallMonitor
             waveState={playback.waveState}

@@ -65,10 +65,11 @@ export default function AdaConfirmModal({ onConfirm, onCancel }) {
 
         <p id="ada-modal-desc" className="text-[14px] text-muted">
           Enable this only if you (or the person you're representing) genuinely have a vocal,
-          cognitive-processing, or hearing-related accessibility need. When enabled, if a dispatcher
-          exhibits automated-blocking behavior, the AI proxy will truthfully disclose this accessibility
-          context. When disabled (default), the proxy always answers identity questions plainly and never
-          references any accessibility status.
+          cognitive-processing, or hearing-related accessibility need. When enabled, if the dispatcher
+          asks whether they're talking to an AI — or moves to block the call — the proxy answers
+          directly that it's an authorized AI voice proxy for someone with an accessibility need. When
+          disabled (default), the proxy answers identity questions plainly and never references any
+          accessibility status.
         </p>
 
         <div className="mt-4 flex items-start gap-2 rounded-lg border border-edge bg-panel2 p-3">
