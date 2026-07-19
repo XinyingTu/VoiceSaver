@@ -123,6 +123,24 @@ def update_agent_tools(api_key: str, agent_id: str, tool_payloads: list[dict]) -
         print(f"  updated tool {name:<22} -> {tool_id}")
 
 
+def update_agent_prompt(api_key: str, agent_id: str, system_prompt: str, first_message: str) -> None:
+    """PATCH the existing agent's system prompt + first message, preserving its tool_ids."""
+    # Re-send the current tool_ids so replacing the prompt object doesn't drop them.
+    tool_ids = get_agent_tool_ids(api_key, agent_id)
+    payload = {
+        "conversation_config": {
+            "agent": {
+                "first_message": first_message,
+                "prompt": {"prompt": system_prompt, "tool_ids": tool_ids},
+            }
+        }
+    }
+    resp = requests.patch(f"{API_ROOT}/agents/{agent_id}", headers=_headers(api_key), json=payload, timeout=30)
+    if resp.status_code >= 300:
+        raise RuntimeError(f"agent prompt update failed HTTP {resp.status_code}: {resp.text}")
+    print(f"  updated system prompt ({len(system_prompt)} chars) and first message; tool_ids preserved")
+
+
 def create_agent(api_key: str, system_prompt: str, first_message: str, tool_ids: list[str]) -> dict:
     payload = {
         "name": AGENT_NAME,
@@ -176,9 +194,10 @@ def main() -> None:
         parser.error("No API key. Set ELEVENLABS_API_KEY or pass --api-key.")
 
     if args.update_agent:
-        print(f"Updating tools on existing agent {args.update_agent}...")
+        print(f"Updating existing agent {args.update_agent} to match local config...")
         update_agent_tools(args.api_key, args.update_agent, tool_payloads)
-        print("\nDONE. Tools updated in place; agent_id unchanged.")
+        update_agent_prompt(args.api_key, args.update_agent, config["system_prompt"], config["first_message"])
+        print("\nDONE. Tools and system prompt updated in place; agent_id unchanged.")
         return
 
     print(f"Creating {len(tool_payloads)} webhook tools on ElevenLabs...")
