@@ -112,6 +112,7 @@ def check() -> int:
         "two-strike cap": "twice",         # never ask for the breakdown more than twice
         "sub-$500 fraud floor": "$500",    # rapid-exit threshold for a scam-level quote
         "brevity ceiling": "two sentences",
+        "anti-repetition rule": "ANTI-REPETITION",  # no repeating a sentence within one turn
     }
     for label, needle in protocol_anchors.items():
         if needle not in prompt:
