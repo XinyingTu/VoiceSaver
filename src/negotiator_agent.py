@@ -42,6 +42,41 @@ PROXY_NAME = "VoiceSaver Proxy"
 # ElevenLabs agent configuration (real config surface)
 # --------------------------------------------------------------------------- #
 
+# Shared object schemas. Object-typed tool parameters MUST spell out their inner
+# properties, otherwise the agent LLM has no idea what fields to put inside them
+# and sends an empty {} — which is exactly what broke log_competitor_quote in the
+# first live ConvAI run (ElevenLabs POSTed {"quote": {}} and the server rejected
+# it for missing 'total').
+_JOB_SPEC_SCHEMA = {
+    "type": "object",
+    "description": "The locked job specification for this move; describe it identically on every call.",
+    "properties": {
+        "household_size": {"type": "string", "description": "Household size, e.g. '2_bedroom'."},
+        "origin_label": {"type": "string", "description": "Origin city/state, e.g. 'Rock Hill, SC'."},
+        "destination_label": {"type": "string", "description": "Destination city/state, e.g. 'Charlotte, NC'."},
+        "distance_miles": {"type": "number", "description": "Distance in miles between origin and destination."},
+        "stair_flights": {"type": "number", "description": "Number of stair flights at the origin."},
+        "inventory_items": {
+            "type": "array",
+            "items": {"type": "string", "description": "A single inventory line item."},
+            "description": "Inventory line items, e.g. 'queen bed + frame', '28 packed boxes'.",
+        },
+    },
+}
+
+_FEE_LINE_ITEMS_SCHEMA = {
+    "type": "object",
+    "description": "The quote broken into named fee line items in dollars. Use 0 for any fee not offered.",
+    "properties": {
+        "base_labor_fee": {"type": "number", "description": "Base labor fee in dollars."},
+        "mileage_fee": {"type": "number", "description": "Mileage fee in dollars."},
+        "stair_carry_fee": {"type": "number", "description": "Stair carry fee in dollars."},
+        "long_carry_fee": {"type": "number", "description": "Long carry fee in dollars."},
+        "packing_materials_fee": {"type": "number", "description": "Packing materials fee in dollars."},
+        "fuel_surcharge": {"type": "number", "description": "Fuel surcharge in dollars."},
+    },
+}
+
 TOOL_SCHEMAS = [
     {
         "name": "get_price_benchmark",
@@ -50,8 +85,8 @@ TOOL_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "vertical": {"type": "string"},
-                "job_spec": {"type": "object"},
+                "vertical": {"type": "string", "description": "The service vertical, e.g. 'moving_services'."},
+                "job_spec": _JOB_SPEC_SCHEMA,
             },
             "required": ["vertical", "job_spec"],
         },
@@ -63,8 +98,22 @@ TOOL_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "session_id": {"type": "string"},
-                "quote": {"type": "object"},
+                "session_id": {"type": "string", "description": "The current session id so quotes persist across calls."},
+                "quote": {
+                    "type": "object",
+                    "description": "The confirmed competing quote to record.",
+                    "properties": {
+                        "company": {"type": "string", "description": "The moving company's name."},
+                        "total": {
+                            "type": "number",
+                            "description": "The final all-in quoted total in dollars. REQUIRED — never omit this.",
+                        },
+                        "fee_line_items": _FEE_LINE_ITEMS_SCHEMA,
+                        "job_spec": _JOB_SPEC_SCHEMA,
+                        "source": {"type": "string", "description": "Where the quote came from, e.g. 'call'."},
+                    },
+                    "required": ["total"],
+                },
             },
             "required": ["session_id", "quote"],
         },
@@ -76,9 +125,12 @@ TOOL_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "quote_total": {"type": "number"},
-                "benchmark_total": {"type": "number"},
-                "job_spec": {"type": "object"},
+                "quote_total": {"type": "number", "description": "The quoted total to check, in dollars."},
+                "benchmark_total": {
+                    "type": "number",
+                    "description": "The market benchmark total to compare against (optional if job_spec is provided).",
+                },
+                "job_spec": _JOB_SPEC_SCHEMA,
             },
             "required": ["quote_total"],
         },
@@ -90,8 +142,17 @@ TOOL_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "transcript_so_far": {"type": "string"},
-                "signals": {"type": "object"},
+                "transcript_so_far": {"type": "string", "description": "The conversation transcript so far."},
+                "signals": {
+                    "type": "object",
+                    "description": "Explicit outcome signals; these take precedence over transcript text.",
+                    "properties": {
+                        "has_itemized_quote": {"type": "boolean", "description": "True if a complete itemized quote was captured."},
+                        "callback_promised": {"type": "boolean", "description": "True if a supervisor/owner callback was booked."},
+                        "declined": {"type": "boolean", "description": "True if the counterparty refused to quote or hung up."},
+                        "reason": {"type": "string", "description": "One-line reason for the classification."},
+                    },
+                },
             },
         },
     },

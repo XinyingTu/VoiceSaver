@@ -87,6 +87,42 @@ def create_tool(api_key: str, payload: dict) -> str:
     return tool_id
 
 
+def get_agent_tool_ids(api_key: str, agent_id: str) -> list[str]:
+    resp = requests.get(f"{API_ROOT}/agents/{agent_id}", headers=_headers(api_key), timeout=30)
+    resp.raise_for_status()
+    agent = resp.json()
+    prompt = agent.get("conversation_config", {}).get("agent", {}).get("prompt", {})
+    return prompt.get("tool_ids", [])
+
+
+def get_tool_name(api_key: str, tool_id: str) -> str:
+    resp = requests.get(f"{API_ROOT}/tools/{tool_id}", headers=_headers(api_key), timeout=30)
+    resp.raise_for_status()
+    return resp.json().get("tool_config", {}).get("name", "")
+
+
+def update_tool(api_key: str, tool_id: str, payload: dict) -> None:
+    resp = requests.patch(f"{API_ROOT}/tools/{tool_id}", headers=_headers(api_key), json=payload, timeout=30)
+    if resp.status_code >= 300:
+        raise RuntimeError(f"tool update failed HTTP {resp.status_code}: {resp.text}")
+
+
+def update_agent_tools(api_key: str, agent_id: str, tool_payloads: list[dict]) -> None:
+    """PATCH the existing agent's tools in place, matched by name (keeps agent_id)."""
+    by_name = {tp["tool_config"]["name"]: tp for tp in tool_payloads}
+    tool_ids = get_agent_tool_ids(api_key, agent_id)
+    if not tool_ids:
+        raise RuntimeError(f"Agent {agent_id} has no tool_ids to update.")
+    for tool_id in tool_ids:
+        name = get_tool_name(api_key, tool_id)
+        payload = by_name.get(name)
+        if not payload:
+            print(f"  skip {tool_id} ({name}): no matching local tool")
+            continue
+        update_tool(api_key, tool_id, payload)
+        print(f"  updated tool {name:<22} -> {tool_id}")
+
+
 def create_agent(api_key: str, system_prompt: str, first_message: str, tool_ids: list[str]) -> dict:
     payload = {
         "name": AGENT_NAME,
@@ -113,6 +149,11 @@ def main() -> None:
     parser.add_argument("--api-key", default=os.environ.get("ELEVENLABS_API_KEY", ""), help="ElevenLabs API key.")
     parser.add_argument("--ada-shield", action="store_true", help="Render the prompt with the ADA Shield active.")
     parser.add_argument("--dry-run", action="store_true", help="Print the payloads without calling the API.")
+    parser.add_argument(
+        "--update-agent",
+        default="",
+        help="Update this existing agent's tools in place (keeps the agent_id) instead of creating a new agent.",
+    )
     args = parser.parse_args()
 
     config = build_agent_config(ada_shield_active=args.ada_shield)
@@ -133,6 +174,12 @@ def main() -> None:
 
     if not args.api_key:
         parser.error("No API key. Set ELEVENLABS_API_KEY or pass --api-key.")
+
+    if args.update_agent:
+        print(f"Updating tools on existing agent {args.update_agent}...")
+        update_agent_tools(args.api_key, args.update_agent, tool_payloads)
+        print("\nDONE. Tools updated in place; agent_id unchanged.")
+        return
 
     print(f"Creating {len(tool_payloads)} webhook tools on ElevenLabs...")
     tool_ids: list[str] = []
