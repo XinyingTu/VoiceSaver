@@ -18,6 +18,10 @@ Rules enforced:
   4. The live-agent system prompt uses the ElevenLabs runtime variable
      {{ada_shield_active}} (so the UI toggle controls it at call time), not a
      value baked in at configure time.
+  5. The system prompt carries the STRICT STOP-LOOPING & FRAUD PROTOCOL: a
+     two-strike cap on breakdown asks, a sub-$500 fraud rapid-exit, and a
+     two-sentence brevity ceiling. These stop the agent looping / haggling a
+     scam quote on a live call.
 
 Usage:
     python scripts/check_realism_rules.py
@@ -102,13 +106,25 @@ def check() -> int:
     if re.search(r"ACTIVE\s*=\s*(True|False)\b", prompt):
         _fail(errors, "Prompt bakes a literal ADA value; it must stay a runtime variable so the toggle controls it.")
 
+    # --- Rule 5: STRICT STOP-LOOPING & FRAUD PROTOCOL is present in the prompt. -
+    protocol_anchors = {
+        "protocol header": "STOP-LOOPING & FRAUD PROTOCOL",
+        "two-strike cap": "twice",         # never ask for the breakdown more than twice
+        "sub-$500 fraud floor": "$500",    # rapid-exit threshold for a scam-level quote
+        "brevity ceiling": "two sentences",
+    }
+    for label, needle in protocol_anchors.items():
+        if needle not in prompt:
+            _fail(errors, f"Prompt missing STRICT protocol anchor ({label}): expected {needle!r}.")
+
     if errors:
         print(f"REALISM CHECK FAILED ({len(errors)} violation(s)):")
         for e in errors:
             print(f"  - {e}")
         return 1
     print("REALISM CHECK PASSED: no leaks; ADA OFF is silent on accessibility; "
-          "ADA ON discloses directly; prompt uses the {{ada_shield_active}} runtime variable.")
+          "ADA ON discloses directly; prompt uses the {{ada_shield_active}} runtime variable; "
+          "STRICT stop-looping & fraud protocol present.")
     return 0
 
 
