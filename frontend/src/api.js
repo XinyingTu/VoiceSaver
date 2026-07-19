@@ -27,6 +27,8 @@ const jsonPost = (path, body) =>
 export const fetchJobSpec = () => req("/api/job_spec");
 export const fetchProfiles = () => req("/api/profiles");
 export const fetchCounterpartyModes = () => req("/api/counterparty/modes");
+export const fetchHumanWidget = (profileId = "mover_002_tough") =>
+  req(`/api/counterparty/human_in_the_loop?profile_id=${encodeURIComponent(profileId)}`);
 export const fetchIntakeDemo = () => req("/api/intake/demo");
 
 export const lockSpec = (jobSpec, adaSelfAttested) =>

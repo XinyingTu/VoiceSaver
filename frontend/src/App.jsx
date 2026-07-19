@@ -3,6 +3,7 @@ import {
   API_BASE,
   attestAdaShield,
   fetchCounterpartyModes,
+  fetchHumanWidget,
   fetchIntakeDemo,
   fetchJobSpec,
   fetchProfiles,
@@ -13,6 +14,7 @@ import {
 import { useSessionPlayback } from "./hooks/useSessionPlayback.js";
 import IntakeColumn from "./components/IntakeColumn.jsx";
 import CallMonitor from "./components/CallMonitor.jsx";
+import HumanWidget from "./components/HumanWidget.jsx";
 import TargetBid from "./components/TargetBid.jsx";
 import ClosingLedger from "./components/ClosingLedger.jsx";
 
@@ -30,6 +32,7 @@ export default function App() {
 
   const [session, setSession] = useState(null);
   const [report, setReport] = useState(null);
+  const [humanWidget, setHumanWidget] = useState(null);
   const [launching, setLaunching] = useState(false);
   const [pendingStart, setPendingStart] = useState(false);
   const [error, setError] = useState(null);
@@ -141,8 +144,19 @@ export default function App() {
     setLaunching(true);
     setSession(null);
     setReport(null);
+    setHumanWidget(null);
     playback.reset();
     try {
+      // Human-in-the-loop is a live ElevenLabs widget, not the local sim — embed it
+      // instead of running an agent-to-agent session.
+      if (mode === "human_in_the_loop") {
+        const info = await fetchHumanWidget();
+        if (!info.agent_id) {
+          throw new Error("Agent not configured on the backend (ELEVENLABS_AGENT_ID missing).");
+        }
+        setHumanWidget(info);
+        return;
+      }
       const { session: s, report: r } = await runSession({
         counterparty_mode: mode,
         ada_by_profile: ada ? { mover_002_tough: true } : {},
@@ -209,12 +223,16 @@ export default function App() {
           running={running}
         />
 
-        <CallMonitor
-          waveState={playback.waveState}
-          revealed={playback.revealed}
-          active={playback.active}
-          status={playback.status}
-        />
+        {humanWidget ? (
+          <HumanWidget info={humanWidget} />
+        ) : (
+          <CallMonitor
+            waveState={playback.waveState}
+            revealed={playback.revealed}
+            active={playback.active}
+            status={playback.status}
+          />
+        )}
 
         <div className="flex flex-col gap-4">
           <TargetBid

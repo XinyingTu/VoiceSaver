@@ -58,6 +58,7 @@ def human_in_the_loop_entrypoint(profile_id: str) -> dict[str, Any]:
     return {
         "mode": HUMAN,
         "available": True,
+        "agent_id": agent_id,
         "instructions": (
             "Embed the ElevenLabs conversation widget for the negotiator agent, then have a "
             "teammate answer and role-play the selected persona live via microphone."

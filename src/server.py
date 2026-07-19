@@ -18,10 +18,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+
+# Load .env so ELEVENLABS_AGENT_ID (and other keys) are visible to the endpoints
+# that surface them — e.g. the human-in-the-loop widget needs the agent id.
+load_dotenv()
 
 from . import counterparty_channel as channel
 from . import document_parser
@@ -200,6 +205,13 @@ def profiles() -> dict[str, Any]:
 @app.get("/api/counterparty/modes")
 def counterparty_modes() -> dict[str, Any]:
     return {"modes": channel.list_modes()}
+
+
+@app.get("/api/counterparty/human_in_the_loop")
+def counterparty_human(profile_id: str = Query("mover_002_tough")) -> dict[str, Any]:
+    """Return the ElevenLabs widget embed info so a teammate can role-play live."""
+    _require_profile(profile_id)
+    return channel.human_in_the_loop_entrypoint(profile_id)
 
 
 @app.get("/api/domain")
