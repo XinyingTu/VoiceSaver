@@ -264,12 +264,14 @@ def simulate_call(
     if headline_lowball:
         events.append({"type": "lowball_flag", "detail": flag["message"]})
         tr.add("proxy", PROXY_NAME,
-               f"That {_money(headline)} is {flag['discount_vs_benchmark']:.0%} below the "
-               f"{_money(benchmark['benchmark_total'])} market benchmark — I have to flag that as a "
-               "possible lowball, not a win. Can we walk the real line items?", headline, events)
+               f"Wait — {_money(headline)} total? For a whole {spec['household_size'].replace('_',' ')} "
+               f"move, {spec['distance_miles']} miles, {spec['stair_flights']} flights of stairs? That "
+               "sounds way too cheap. What's the catch — are there fees that show up on moving day? "
+               "Walk me through the real numbers.", headline, events)
     else:
         tr.add("proxy", PROXY_NAME,
-               f"Okay. Against a {_money(benchmark['benchmark_total'])} benchmark, let's itemize that.",
+               "Okay. Before I take that number, walk me through it — what's labor, what's the "
+               "mileage, any charge for the stairs or fuel?",
                headline, events)
 
     # 4) Automated-blocking friction + identity disclosure (adds turns dynamically).
@@ -327,7 +329,8 @@ def simulate_call(
                revealed, [{"type": "upcharge", "detail": "Hidden fees surfaced after the low anchor."}])
         price_timeline.append(revealed)
         tr.add("proxy", PROXY_NAME,
-               "Right — so let's put every one of those on the record as line items, not a mystery total.",
+               "See, that's what I figured — those were baked in the whole time. Spell every one of them "
+               "out for me, no mystery total.",
                revealed)
 
     # 7) Resolve outcome dynamically from what happened.
@@ -372,10 +375,10 @@ def _resolve_outcome(profile, sim, session_id, spec, domain, tr, price_timeline,
                 "message": T.check_lowball_flag(headline, benchmark_total=benchmark["benchmark_total"])["message"],
             }
         tr.add("proxy", PROXY_NAME,
-               f"Good — final itemized total {_money(final_total)}: base labor {_money(items['base_labor_fee'])}, "
-               f"mileage {_money(items['mileage_fee'])}, stair carry {_money(items['stair_carry_fee'])}, "
-               f"packing {_money(items['packing_materials_fee'])}, fuel surcharge {_money(items['fuel_surcharge'])}. "
-               "I'll log that as your comparable quote.", final_total)
+               f"Got it — so {_money(final_total)} all-in, with {_money(items['base_labor_fee'])} for labor, "
+               f"{_money(items['mileage_fee'])} for the miles, and the stairs and fuel in there too. Thanks "
+               "for actually breaking that down for me — that's all I needed. Appreciate your time, take care.",
+               final_total)
         final_quote = {"company": profile["name"], "total": final_total, "fee_line_items": items}
         outcome = T.classify_outcome(signals={"has_itemized_quote": True,
                                               "reason": "Complete itemized quote captured on the call."})
@@ -384,7 +387,7 @@ def _resolve_outcome(profile, sim, session_id, spec, domain, tr, price_timeline,
         tr.add("dispatcher", dispatcher,
                "I can't price this now — let me have my supervisor call you back tomorrow morning.",
                price_timeline[-1])
-        tr.add("proxy", PROXY_NAME, "Understood, I'll note the callback window for tomorrow AM.", price_timeline[-1])
+        tr.add("proxy", PROXY_NAME, "Sounds good — I'll expect the call tomorrow morning. Thanks for that.", price_timeline[-1])
         outcome = T.classify_outcome(signals={"callback_promised": True,
                                               "reason": "Supervisor callback booked for tomorrow AM."})
 
@@ -393,7 +396,8 @@ def _resolve_outcome(profile, sim, session_id, spec, domain, tr, price_timeline,
                "I'm not going to match anyone and I'm not itemizing over the phone. Deposit or lose my number.",
                price_timeline[-1])
         tr.add("proxy", PROXY_NAME,
-               "That's a clear decline to quote — I'll document it and move on. Thanks for your time.",
+               "Okay — sounds like you won't give me a real number without a deposit, and I'm not doing "
+               "that sight-unseen. I'll pass. Thanks for your time.",
                price_timeline[-1])
         outcome = T.classify_outcome(signals={"declined": True,
                                               "reason": "Refused to itemize or match; pushed a deposit."})
