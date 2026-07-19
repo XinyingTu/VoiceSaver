@@ -32,6 +32,9 @@ export const fetchIntakeDemo = () => req("/api/intake/demo");
 export const lockSpec = (jobSpec, adaSelfAttested) =>
   jsonPost("/api/job_spec/lock", { job_spec: jobSpec, ada_self_attested: adaSelfAttested });
 
+export const attestAdaShield = (sessionId) =>
+  jsonPost("/api/ada/attest", { session_id: sessionId, confirmed: true });
+
 export const runSession = (body) => jsonPost("/api/session/run", body);
 
 export const uploadVision = async (file, allowDemoFallback = false) => {

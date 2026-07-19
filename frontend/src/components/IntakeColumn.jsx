@@ -1,5 +1,6 @@
-import React, { useRef } from "react";
+import React, { useRef, useState } from "react";
 import { LockIcon, ShieldIcon, PhoneIcon, DocIcon } from "./Icons.jsx";
+import AdaConfirmModal from "./AdaConfirmModal.jsx";
 import { money } from "../api.js";
 
 const HOUSEHOLD_OPTIONS = ["studio", "1_bedroom", "2_bedroom", "3_bedroom", "4_bedroom_plus"];
@@ -21,6 +22,7 @@ export default function IntakeColumn({
   onUnlock,
   ada,
   onAdaToggle,
+  onAdaConfirm,
   intakeInfo,
   importing,
   importError,
@@ -34,6 +36,25 @@ export default function IntakeColumn({
   running,
 }) {
   const fileRef = useRef(null);
+  const adaToggleRef = useRef(null);
+  const [adaModalOpen, setAdaModalOpen] = useState(false);
+
+  const closeAdaModal = () => {
+    setAdaModalOpen(false);
+    // Return focus to the toggle after the dialog unmounts.
+    setTimeout(() => adaToggleRef.current?.focus(), 0);
+  };
+  const onAdaSwitchClick = () => {
+    if (ada) {
+      onAdaToggle(false); // turning OFF is a single click, no friction
+    } else {
+      setAdaModalOpen(true); // turning ON requires explicit confirmation
+    }
+  };
+  const handleAdaConfirm = () => {
+    onAdaConfirm();
+    closeAdaModal();
+  };
 
   return (
     <section className="panel flex flex-col p-4" aria-label="Intake asset and spec center">
@@ -137,19 +158,25 @@ export default function IntakeColumn({
             <ShieldIcon className={ada ? "text-access" : "text-muted"} />
             <span className="text-[14px] font-semibold text-body">ADA Voice Equity Shield</span>
           </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={ada}
-            aria-label="ADA Voice Equity Shield self-attestation toggle"
-            onClick={() => onAdaToggle(!ada)}
-            disabled={locked}
-            className={`relative h-6 w-11 shrink-0 rounded-full border transition ${
-              ada ? "border-access bg-access/30" : "border-edge bg-surface"
-            } ${locked ? "opacity-70" : ""}`}
-          >
-            <span className={`absolute top-0.5 h-4 w-4 rounded-full transition-all ${ada ? "left-6 bg-access" : "left-0.5 bg-muted"}`} />
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className={`text-[13px] font-semibold ${ada ? "text-access" : "text-muted"}`} aria-hidden>
+              {ada ? "On" : "Off"}
+            </span>
+            <button
+              ref={adaToggleRef}
+              type="button"
+              role="switch"
+              aria-checked={ada}
+              aria-label="ADA Voice Equity Shield self-attestation toggle"
+              onClick={onAdaSwitchClick}
+              disabled={locked}
+              className={`relative h-6 w-11 shrink-0 rounded-full border transition ${
+                ada ? "border-access bg-access/30" : "border-edge bg-surface"
+              } ${locked ? "opacity-70" : ""}`}
+            >
+              <span className={`absolute top-0.5 h-4 w-4 rounded-full transition-all ${ada ? "left-6 bg-access" : "left-0.5 bg-muted"}`} />
+            </button>
+          </div>
         </div>
         {ada && <div className="mt-2"><span className="badge badge-access"><ShieldIcon /> SELF-ATTESTED · ACTIVE</span></div>}
         <p className="mt-2 text-[13px] text-muted">
@@ -193,6 +220,10 @@ export default function IntakeColumn({
       </button>
       {!locked && (
         <p className="mt-1.5 text-center text-[13px] text-muted">Lock the spec to enable launch.</p>
+      )}
+
+      {adaModalOpen && (
+        <AdaConfirmModal onConfirm={handleAdaConfirm} onCancel={closeAdaModal} />
       )}
     </section>
   );

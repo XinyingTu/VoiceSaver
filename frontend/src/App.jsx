@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import {
   API_BASE,
+  attestAdaShield,
   fetchCounterpartyModes,
   fetchIntakeDemo,
   fetchJobSpec,
@@ -17,6 +18,7 @@ import ClosingLedger from "./components/ClosingLedger.jsx";
 
 export default function App() {
   const [spec, setSpec] = useState({ inventory_items: [] });
+  const [sessionId, setSessionId] = useState(null);
   const [locked, setLocked] = useState(false);
   const [ada, setAda] = useState(false);
   const [modes, setModes] = useState([]);
@@ -40,6 +42,7 @@ export default function App() {
     Promise.all([fetchJobSpec(), fetchProfiles(), fetchCounterpartyModes()])
       .then(([job, prof, cp]) => {
         setSpec(job.job_spec);
+        setSessionId(job.session_id);
         setAda(Boolean(job.ada_shield?.active));
         setLocked(Boolean(job.spec_locked));
         setModes(cp.modes);
@@ -61,6 +64,16 @@ export default function App() {
   }, [pendingStart, session, playback]);
 
   const onField = (key, value) => setSpec((prev) => ({ ...prev, [key]: value }));
+
+  // Only called after the user explicitly confirms in the ADA modal.
+  const onAdaConfirm = async () => {
+    try {
+      await attestAdaShield(sessionId);
+    } catch (e) {
+      setError(`ADA attestation log failed: ${e.message}`);
+    }
+    setAda(true);
+  };
 
   const applyIntake = (parsed) => {
     const js = parsed.job_spec || {};
@@ -182,6 +195,7 @@ export default function App() {
           onUnlock={onUnlock}
           ada={ada}
           onAdaToggle={setAda}
+          onAdaConfirm={onAdaConfirm}
           intakeInfo={intakeInfo}
           importing={importing}
           importError={importError}

@@ -12,7 +12,9 @@ Run:  uvicorn src.server:app --reload --port 8000
 
 from __future__ import annotations
 
+import logging
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -62,6 +64,12 @@ class _State:
 
 STATE = _State()
 
+# Audit trail for explicit ADA self-attestation confirmations. This records that
+# a human actively confirmed the attestation (not merely flipped a toggle). It is
+# an audit trail, NOT identity verification — no documents or medical proof.
+AUDIT_LOG: list[dict[str, Any]] = []
+_audit_logger = logging.getLogger("voicesaver.audit")
+
 
 def _public_profile(p: dict[str, Any]) -> dict[str, Any]:
     return {
@@ -87,6 +95,11 @@ def _require_profile(profile_id: str) -> dict[str, Any]:
 class LockSpecBody(BaseModel):
     job_spec: Optional[dict[str, Any]] = None
     ada_self_attested: bool = False
+
+
+class AdaAttestBody(BaseModel):
+    session_id: Optional[str] = None
+    confirmed: bool = True
 
 
 class RunSessionBody(BaseModel):
@@ -152,6 +165,31 @@ def lock_spec(body: LockSpecBody) -> dict[str, Any]:
 def unlock_spec() -> dict[str, Any]:
     STATE.spec_locked = False
     return {"spec_locked": False}
+
+
+@app.post("/api/ada/attest")
+def ada_attest(body: AdaAttestBody) -> dict[str, Any]:
+    """
+    Record an EXPLICIT ADA-Shield self-attestation confirmation (the user clicked
+    'Confirm & Enable' in the modal, not just flipped a toggle). Audit trail only.
+    """
+    session_id = body.session_id or STATE.session_id
+    event = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "session_id": session_id,
+        "event": "ada_shield_self_attestation_confirmed",
+        "confirmed": bool(body.confirmed),
+        "note": "User explicitly confirmed the self-attestation via the confirmation dialog.",
+    }
+    AUDIT_LOG.append(event)
+    STATE.ada_self_attested = bool(body.confirmed)
+    _audit_logger.info("ADA self-attestation confirmed: %s", event)
+    return {"ok": True, "event": event, "ada_self_attested": STATE.ada_self_attested}
+
+
+@app.get("/api/ada/audit")
+def ada_audit() -> dict[str, Any]:
+    return {"audit": AUDIT_LOG}
 
 
 @app.get("/api/profiles")
