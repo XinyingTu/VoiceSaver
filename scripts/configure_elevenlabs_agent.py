@@ -123,7 +123,19 @@ def update_agent_tools(api_key: str, agent_id: str, tool_payloads: list[dict]) -
         print(f"  updated tool {name:<22} -> {tool_id}")
 
 
-def update_agent_prompt(api_key: str, agent_id: str, system_prompt: str, first_message: str) -> None:
+def _dynamic_variables_block(dynamic_variables: dict) -> dict:
+    """conversation_config.agent.dynamic_variables block registering placeholder defaults.
+
+    These are the values ElevenLabs substitutes for {{var}} when the client SDK
+    doesn't pass one (e.g. the dashboard test tool). Our widget always sends the
+    live ada_shield_active value at startSession, so this is the safe fallback.
+    """
+    return {"dynamic_variables": {"dynamic_variable_placeholders": dynamic_variables}}
+
+
+def update_agent_prompt(
+    api_key: str, agent_id: str, system_prompt: str, first_message: str, dynamic_variables: dict
+) -> None:
     """PATCH the existing agent's system prompt + first message, preserving its tool_ids."""
     # Re-send the current tool_ids so replacing the prompt object doesn't drop them.
     tool_ids = get_agent_tool_ids(api_key, agent_id)
@@ -132,16 +144,20 @@ def update_agent_prompt(api_key: str, agent_id: str, system_prompt: str, first_m
             "agent": {
                 "first_message": first_message,
                 "prompt": {"prompt": system_prompt, "tool_ids": tool_ids},
+                **_dynamic_variables_block(dynamic_variables),
             }
         }
     }
     resp = requests.patch(f"{API_ROOT}/agents/{agent_id}", headers=_headers(api_key), json=payload, timeout=30)
     if resp.status_code >= 300:
         raise RuntimeError(f"agent prompt update failed HTTP {resp.status_code}: {resp.text}")
-    print(f"  updated system prompt ({len(system_prompt)} chars) and first message; tool_ids preserved")
+    print(f"  updated system prompt ({len(system_prompt)} chars), first message, and "
+          f"dynamic-variable defaults {dynamic_variables}; tool_ids preserved")
 
 
-def create_agent(api_key: str, system_prompt: str, first_message: str, tool_ids: list[str]) -> dict:
+def create_agent(
+    api_key: str, system_prompt: str, first_message: str, tool_ids: list[str], dynamic_variables: dict
+) -> dict:
     payload = {
         "name": AGENT_NAME,
         "conversation_config": {
@@ -152,6 +168,7 @@ def create_agent(api_key: str, system_prompt: str, first_message: str, tool_ids:
                     "prompt": system_prompt,
                     "tool_ids": tool_ids,
                 },
+                **_dynamic_variables_block(dynamic_variables),
             }
         },
     }
@@ -182,7 +199,8 @@ def main() -> None:
         print(f"Agent name : {AGENT_NAME}")
         print(f"Base URL   : {args.base.rstrip('/')}")
         print(f"System prompt: {len(config['system_prompt'])} chars")
-        print(f"First message: {config['first_message']}\n")
+        print(f"First message: {config['first_message']}")
+        print(f"Dynamic-var defaults: {config['dynamic_variables']}\n")
         for tp in tool_payloads:
             tc = tp["tool_config"]
             print(f"- {tc['name']:<22} POST {tc['api_schema']['url']}")
@@ -196,7 +214,10 @@ def main() -> None:
     if args.update_agent:
         print(f"Updating existing agent {args.update_agent} to match local config...")
         update_agent_tools(args.api_key, args.update_agent, tool_payloads)
-        update_agent_prompt(args.api_key, args.update_agent, config["system_prompt"], config["first_message"])
+        update_agent_prompt(
+            args.api_key, args.update_agent, config["system_prompt"],
+            config["first_message"], config["dynamic_variables"],
+        )
         print("\nDONE. Tools and system prompt updated in place; agent_id unchanged.")
         return
 
@@ -208,7 +229,9 @@ def main() -> None:
         print(f"  created tool {tp['tool_config']['name']:<22} -> {tool_id}")
 
     print("\nCreating agent...")
-    agent = create_agent(args.api_key, config["system_prompt"], config["first_message"], tool_ids)
+    agent = create_agent(
+        args.api_key, config["system_prompt"], config["first_message"], tool_ids, config["dynamic_variables"],
+    )
     agent_id = agent.get("agent_id") or agent.get("id")
     print(f"\nDONE. agent_id = {agent_id}")
     print(f"Tools wired: {', '.join(tool_ids)}")

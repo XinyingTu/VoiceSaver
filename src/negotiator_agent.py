@@ -167,15 +167,19 @@ def build_agent_config(
     """Render the ElevenLabs agent config (prompt + tools) for a session."""
     job = load_job_spec()
     spec = job_spec or job["job_spec"]
-    prompt = (
-        load_negotiator_prompt()
-        .replace("{job_spec_json}", json.dumps(spec, indent=2))
-        .replace("{ada_shield_active}", str(bool(ada_shield_active)))
-    )
+    # {{ada_shield_active}} stays UNresolved here on purpose: it's an ElevenLabs
+    # runtime dynamic variable so the UI toggle controls disclosure at call time,
+    # instead of being baked into a single static agent. `ada_shield_active` only
+    # sets the placeholder DEFAULT used when no value is supplied by the client.
+    prompt = load_negotiator_prompt().replace("{job_spec_json}", json.dumps(spec, indent=2))
     return {
         "platform": "elevenlabs_agents",
         "session_id": session_id or job.get("session_id"),
         "ada_shield_active": bool(ada_shield_active),
+        # Default for the {{ada_shield_active}} runtime variable (string, lowercase
+        # to match the true/false the client SDK sends). Registered on the agent as
+        # a dynamic_variable_placeholder by configure_elevenlabs_agent.py.
+        "dynamic_variables": {"ada_shield_active": str(bool(ada_shield_active)).lower()},
         "system_prompt": prompt,
         "tools": TOOL_SCHEMAS,
         "first_message": (
@@ -282,9 +286,9 @@ def simulate_call(
         if ada_shield_active:
             ada_triggered = True
             tr.add("proxy", PROXY_NAME,
-                   "I'll be transparent: I'm an authorized AI voice proxy assisting a client who has a "
-                   "genuine accessibility need with phone calls. I'm placing this call on their behalf — "
-                   "I'd appreciate a fair itemized quote just like any other customer.",
+                   "Yes — I'm an AI voice proxy placing this call for someone with an accessibility need "
+                   "that makes phone calls hard, and I'm authorized to get quotes on their behalf. So let's "
+                   "keep it simple — I just need a fair itemized number, same as any other customer.",
                    price_timeline[-1], [{"type": "ada_shield", "detail": "Truthful ADA proxy disclosure (Shield active)."}])
             tr.add("dispatcher", dispatcher,
                    "...Alright, that's fair. I'll hear you out. What are you working with?", price_timeline[-1])
@@ -442,7 +446,11 @@ def run_session(
     T.SESSIONS.reset(session_id)
 
     order = profile_order or ["mover_001_lowballer", "mover_002_tough", "mover_003_hard_seller"]
-    ada_by_profile = ada_by_profile or {"mover_002_tough": True}
+    # Only fall back to the demo default when the caller passed nothing at all.
+    # An explicit empty dict means "ADA off for everyone" (the UI sends {} when the
+    # Shield toggle is off) — treating {} as falsy here would wrongly re-enable it.
+    if ada_by_profile is None:
+        ada_by_profile = {"mover_002_tough": True}
 
     calls = []
     for pid in order:

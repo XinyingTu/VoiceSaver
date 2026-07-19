@@ -88,7 +88,7 @@ def _print_turn(turn: dict) -> int:
     return n
 
 
-def run(agent_id: str, api_key: str, turns: int) -> int:
+def run(agent_id: str, api_key: str, turns: int, ada_shield: bool = False) -> int:
     url = f"{API_ROOT}/agents/{agent_id}/simulate-conversation"
     payload = {
         "simulation_specification": {
@@ -96,7 +96,11 @@ def run(agent_id: str, api_key: str, turns: int) -> int:
                 "first_message": "Movers, this is Rick — what do you need?",
                 "language": "en",
                 "prompt": {"prompt": DISPATCHER_PERSONA},
-            }
+            },
+            # Resolve the agent's {{ada_shield_active}} runtime variable for this
+            # simulation. Omit it to exercise the agent's registered default
+            # (false) instead. Values are strings to match what the widget sends.
+            "dynamic_variables": {"ada_shield_active": "true" if ada_shield else "false"},
         },
         "new_turns_limit": turns,
     }
@@ -133,12 +137,14 @@ def main() -> None:
     parser.add_argument("--agent-id", default=os.environ.get("ELEVENLABS_AGENT_ID", ""))
     parser.add_argument("--api-key", default=os.environ.get("ELEVENLABS_API_KEY", ""))
     parser.add_argument("--turns", type=int, default=14, help="Max new turns for the simulation.")
+    parser.add_argument("--ada-shield", action="store_true",
+                        help="Resolve {{ada_shield_active}} to true for this run (default: false).")
     args = parser.parse_args()
     if not args.agent_id:
         parser.error("No agent id. Set ELEVENLABS_AGENT_ID or pass --agent-id.")
     if not args.api_key:
         parser.error("No API key. Set ELEVENLABS_API_KEY or pass --api-key.")
-    sys.exit(run(args.agent_id, args.api_key, args.turns))
+    sys.exit(run(args.agent_id, args.api_key, args.turns, ada_shield=args.ada_shield))
 
 
 if __name__ == "__main__":
