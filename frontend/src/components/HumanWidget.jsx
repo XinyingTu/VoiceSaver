@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ConversationProvider, useConversation } from "@elevenlabs/react";
 import Waveform from "./Waveform.jsx";
-import { extractPrice, parseClosingEntry } from "../api.js";
+import { latestPrice, parseClosingEntry } from "../api.js";
 
 // Human-in-the-loop live voice via the ElevenLabs React SDK (not the embed
 // widget). useConversation lets us: render our own real-time transcript from
@@ -41,11 +41,13 @@ function LiveCall({ info, ada, onPrice, onStatus, onClose }) {
       const line = toLine(msg, (seqRef.current += 1));
       transcriptRef.current = [...transcriptRef.current, line];
       setTranscript((prev) => [...prev, line]);
-      // Surface the live number on the table for the Savings Counter. The tool
-      // webhooks fire server-side, but the spoken price is right here in the
-      // conversation — feed it up so the odometer rolls in real time.
-      const price = extractPrice(text);
-      if (price != null && onPrice) {
+      // Force-feed the live number on the table to the Savings Counter. The tool
+      // webhooks fire server-side and may miss/mangle total_price, so we don't
+      // depend on them: rescan the WHOLE spoken transcript for the latest credible
+      // total and push it up. Once any price is spoken the counter shows it and
+      // never blanks; a line with no number leaves the last price in place.
+      const price = latestPrice(transcriptRef.current);
+      if (price != null && price !== lastPriceRef.current && onPrice) {
         const prev = lastPriceRef.current;
         const isDrop = prev != null && price < prev;
         lastPriceRef.current = price;

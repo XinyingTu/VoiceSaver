@@ -136,6 +136,24 @@ export function parseClosingEntry(transcript, { fallbackName = "Dispatcher" } = 
   return { name, price, outcome, outcomeLabel: OUTCOME_LABEL[outcome], evidence };
 }
 
+// Transcript price fallback for the live "Current Target Bid". Scans the whole
+// spoken transcript (dispatcher AND proxy lines) and returns the latest credible
+// dollar total, or null if none has been spoken yet. This is the authoritative
+// source for the live counter: the ElevenLabs tool webhooks fire server-side and
+// may miss/mangle total_price, but the number on the table is right here in the
+// words — so we read it straight from the transcript and never blank once a
+// figure has been said. Accepts [{ text }] lines or bare strings. Pure + tested.
+export function latestPrice(transcript) {
+  const lines = Array.isArray(transcript) ? transcript : [];
+  let latest = null;
+  for (const ln of lines) {
+    const text = typeof ln === "string" ? ln : ln?.text;
+    const p = extractPrice(text);
+    if (p != null) latest = p; // last credible figure across the transcript wins
+  }
+  return latest;
+}
+
 export const uploadVision = async (file, allowDemoFallback = false) => {
   const form = new FormData();
   form.append("file", file);

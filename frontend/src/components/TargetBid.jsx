@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from "react";
-import RollingNumber from "./RollingNumber.jsx";
 import { money } from "../api.js";
 
 export default function TargetBid({
@@ -36,17 +35,24 @@ export default function TargetBid({
         }`}
       >
         <div className="label">{done ? "Final Secured Bid" : "Current Target Bid"}</div>
+        {/* Plain, always-accurate number — the odometer roll is parked for now;
+            data accuracy on the live bid matters more than the animation. */}
         <div
           data-testid="target-bid"
+          role="status"
+          aria-live="polite"
           className={`font-mono text-5xl font-black tabular-nums ${
             flash ? "text-success" : done ? "text-success" : "text-body"
           }`}
         >
-          {/* Odometer roll (aria-hidden) + a plain live-region number for AT. */}
-          <RollingNumber value={headlineNumber} />
-          <span className="sr-only" role="status" aria-live="polite">
-            {headlineNumber != null ? money(headlineNumber) : "no bid yet"}
-          </span>
+          {headlineNumber != null ? (
+            money(headlineNumber)
+          ) : (
+            <>
+              <span aria-hidden="true">—</span>
+              <span className="sr-only">no bid yet</span>
+            </>
+          )}
         </div>
         <div className="mt-1 text-[13px] text-muted">
           {done
