@@ -1,15 +1,20 @@
 import React, { useEffect, useState } from "react";
-import { useAnimatedNumber } from "../hooks/useAnimatedNumber.js";
+import RollingNumber from "./RollingNumber.jsx";
 import { money } from "../api.js";
 
-export default function TargetBid({ currentBid, priceDropSeq, benchmark, report, status }) {
-  const savings = report?.savings_summary;
+export default function TargetBid({
+  currentBid,
+  priceDropSeq,
+  benchmark,
+  bestItemized,
+  savings,
+  status,
+}) {
   const done = status === "done";
   // While live, track the number on the table. At done, settle on the best
   // itemized quote secured (the last call may be a decline that would otherwise
   // freeze this counter on a rejected price).
-  const headlineNumber = done && savings ? savings.recommended_total : currentBid;
-  const display = useAnimatedNumber(headlineNumber ?? 0, 750);
+  const headlineNumber = done && bestItemized != null ? bestItemized : currentBid;
   const [flash, setFlash] = useState(false);
 
   // Brief highlight each time a concession tumbles the number.
@@ -34,12 +39,14 @@ export default function TargetBid({ currentBid, priceDropSeq, benchmark, report,
         <div
           data-testid="target-bid"
           className={`font-mono text-5xl font-black tabular-nums ${
-            flash ? "animate-tumble text-success" : done ? "text-success" : "text-body"
+            flash ? "text-success" : done ? "text-success" : "text-body"
           }`}
-          role="status"
-          aria-live="polite"
         >
-          {headlineNumber != null ? money(display) : "—"}
+          {/* Odometer roll (aria-hidden) + a plain live-region number for AT. */}
+          <RollingNumber value={headlineNumber} />
+          <span className="sr-only" role="status" aria-live="polite">
+            {headlineNumber != null ? money(headlineNumber) : "no bid yet"}
+          </span>
         </div>
         <div className="mt-1 text-[13px] text-muted">
           {done
@@ -58,7 +65,7 @@ export default function TargetBid({ currentBid, priceDropSeq, benchmark, report,
         <div className="rounded-md border border-edge bg-panel2 px-3 py-2 text-center">
           <div className="label">Best Itemized</div>
           <div className="font-mono text-lg text-success">
-            {savings ? money(savings.recommended_total) : "—"}
+            {bestItemized != null ? money(bestItemized) : "—"}
           </div>
         </div>
       </div>

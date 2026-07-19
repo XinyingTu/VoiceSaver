@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   API_BASE,
   attestAdaShield,
@@ -7,6 +7,7 @@ import {
   fetchIntakeDemo,
   fetchJobSpec,
   fetchProfiles,
+  getPriceBenchmark,
   lockSpec,
   runSession,
   uploadVision,
@@ -33,6 +34,14 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [report, setReport] = useState(null);
   const [humanWidget, setHumanWidget] = useState(null);
+  // Live savings feed for human-in-the-loop mode (no simulated report to read).
+  const [humanPrice, setHumanPrice] = useState({ current: null, seq: 0, best: null });
+  const [humanStatus, setHumanStatus] = useState("idle");
+  const [humanBenchmark, setHumanBenchmark] = useState(null);
+  // Closing ledger for live human-in-the-loop calls: each finished call is
+  // parsed from its transcript and appended here so the ledger renders a ranked,
+  // evidence-cited card instantly (no backend report exists in this mode).
+  const [humanLedger, setHumanLedger] = useState([]);
   const [launching, setLaunching] = useState(false);
   const [pendingStart, setPendingStart] = useState(false);
   const [error, setError] = useState(null);
@@ -40,6 +49,26 @@ export default function App() {
 
   const playback = useSessionPlayback(session);
   const running = playback.status === "running";
+
+  // One savings feed for the counter, whichever channel is live: the simulated
+  // playback (with its report) or the human-in-the-loop conversation.
+  const feed = humanWidget
+    ? {
+        currentBid: humanPrice.current,
+        priceDropSeq: humanPrice.seq,
+        benchmark: humanBenchmark,
+        bestItemized: humanPrice.best,
+        status: humanStatus,
+        savings: null,
+      }
+    : {
+        currentBid: playback.currentBid,
+        priceDropSeq: playback.priceDropSeq,
+        benchmark: report?.benchmark_total,
+        bestItemized: report?.savings_summary?.recommended_total,
+        status: playback.status,
+        savings: report?.savings_summary,
+      };
 
   useEffect(() => {
     Promise.all([fetchJobSpec(), fetchProfiles(), fetchCounterpartyModes()])
@@ -67,6 +96,35 @@ export default function App() {
   }, [pendingStart, session, playback]);
 
   const onField = (key, value) => setSpec((prev) => ({ ...prev, [key]: value }));
+
+  // Live price surfaced from the human-in-the-loop conversation. Tracks the
+  // number on the table, counts downward concessions (drives the odometer
+  // tumble), and keeps the best (lowest) figure secured so far.
+  const onHumanPrice = useCallback((p) => {
+    if (p?.reset) {
+      setHumanPrice({ current: null, seq: 0, best: null });
+      return;
+    }
+    setHumanPrice((prev) => ({
+      current: p.price,
+      seq: p.isDrop ? prev.seq + 1 : prev.seq,
+      best: prev.best == null ? p.price : Math.min(prev.best, p.price),
+    }));
+  }, []);
+  const onHumanStatus = useCallback((s) => setHumanStatus(s), []);
+
+  // A live call ended: append its parsed entry to the closing ledger.
+  const onHumanClose = useCallback((entry) => {
+    if (!entry) return;
+    setHumanLedger((prev) => [...prev, { ...entry, id: prev.length + 1 }]);
+  }, []);
+
+  const resetHumanFeed = () => {
+    setHumanPrice({ current: null, seq: 0, best: null });
+    setHumanStatus("idle");
+    setHumanBenchmark(null);
+    setHumanLedger([]);
+  };
 
   // Only called after the user explicitly confirms in the ADA modal.
   const onAdaConfirm = async () => {
@@ -135,6 +193,8 @@ export default function App() {
     setLocked(false);
     setSession(null);
     setReport(null);
+    setHumanWidget(null);
+    resetHumanFeed();
     playback.reset();
   };
 
@@ -145,6 +205,7 @@ export default function App() {
     setSession(null);
     setReport(null);
     setHumanWidget(null);
+    resetHumanFeed();
     playback.reset();
     try {
       // Human-in-the-loop is a live ElevenLabs widget, not the local sim — embed it
@@ -155,6 +216,11 @@ export default function App() {
           throw new Error("Agent not configured on the backend (ELEVENLABS_AGENT_ID missing).");
         }
         setHumanWidget(info);
+        // Populate BENCHMARK (2BR) from the same webhook the live agent calls,
+        // so the Savings Counter isn't blank before the first spoken quote.
+        getPriceBenchmark(spec)
+          .then((b) => setHumanBenchmark(b.benchmark_total))
+          .catch(() => {/* leave benchmark blank if unavailable */});
         return;
       }
       const { session: s, report: r } = await runSession({
@@ -224,7 +290,13 @@ export default function App() {
         />
 
         {humanWidget ? (
-          <HumanWidget info={humanWidget} ada={ada} />
+          <HumanWidget
+            info={humanWidget}
+            ada={ada}
+            onPrice={onHumanPrice}
+            onStatus={onHumanStatus}
+            onClose={onHumanClose}
+          />
         ) : (
           <CallMonitor
             waveState={playback.waveState}
@@ -236,16 +308,18 @@ export default function App() {
 
         <div className="flex flex-col gap-4">
           <TargetBid
-            currentBid={playback.currentBid}
-            priceDropSeq={playback.priceDropSeq}
-            benchmark={report?.benchmark_total}
-            report={report}
-            status={playback.status}
+            currentBid={feed.currentBid}
+            priceDropSeq={feed.priceDropSeq}
+            benchmark={feed.benchmark}
+            bestItemized={feed.bestItemized}
+            savings={feed.savings}
+            status={feed.status}
           />
           <ClosingLedger
             report={report}
             completedProfileIds={playback.completedProfileIds}
             status={playback.status}
+            liveEntries={humanWidget ? humanLedger : []}
           />
         </div>
       </main>

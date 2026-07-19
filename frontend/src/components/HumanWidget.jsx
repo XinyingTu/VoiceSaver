@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ConversationProvider, useConversation } from "@elevenlabs/react";
+import Waveform from "./Waveform.jsx";
+import { extractPrice, parseClosingEntry } from "../api.js";
 
 // Human-in-the-loop live voice via the ElevenLabs React SDK (not the embed
 // widget). useConversation lets us: render our own real-time transcript from
@@ -19,18 +21,36 @@ function toLine(msg, id) {
   return { id, isProxy: source === "ai" || source === "agent", text };
 }
 
-function LiveCall({ info, ada }) {
+function LiveCall({ info, ada, onPrice, onStatus, onClose }) {
   const agentId = info?.agent_id;
   const [transcript, setTranscript] = useState([]);
   const [callError, setCallError] = useState(null);
   const seqRef = useRef(0);
   const scrollRef = useRef(null);
+  // Last price surfaced live, so we can flag a downward concession vs. an upcharge.
+  const lastPriceRef = useRef(null);
+  // Latest transcript for the end-of-call parser (avoids stale-closure reads in
+  // the lifecycle effect), plus a guard so we close the ledger entry only once.
+  const transcriptRef = useRef([]);
+  const finalizedRef = useRef(false);
 
   const conversation = useConversation({
     onMessage: (msg) => {
       const text = msg?.message ?? msg?.text ?? "";
       if (!text.trim()) return; // skip empty/debug frames
-      setTranscript((prev) => [...prev, toLine(msg, (seqRef.current += 1))]);
+      const line = toLine(msg, (seqRef.current += 1));
+      transcriptRef.current = [...transcriptRef.current, line];
+      setTranscript((prev) => [...prev, line]);
+      // Surface the live number on the table for the Savings Counter. The tool
+      // webhooks fire server-side, but the spoken price is right here in the
+      // conversation — feed it up so the odometer rolls in real time.
+      const price = extractPrice(text);
+      if (price != null && onPrice) {
+        const prev = lastPriceRef.current;
+        const isDrop = prev != null && price < prev;
+        lastPriceRef.current = price;
+        onPrice({ price, isDrop });
+      }
     },
     onError: (err) => setCallError(typeof err === "string" ? err : err?.message || "Conversation error."),
   });
@@ -48,6 +68,10 @@ function LiveCall({ info, ada }) {
     setCallError(null);
     setTranscript([]);
     seqRef.current = 0;
+    lastPriceRef.current = null;
+    transcriptRef.current = [];
+    finalizedRef.current = false;
+    onPrice?.({ reset: true });
     try {
       // Prompt for the mic explicitly so a denial surfaces a clear message
       // instead of a generic SDK failure. Release this probe stream right away —
@@ -77,11 +101,44 @@ function LiveCall({ info, ada }) {
     ? (isSpeaking ? "● proxy speaking" : "● listening")
     : connecting ? "◌ connecting" : "○ standby";
 
+  // Drive the persistent waveform + the shared savings-counter status.
+  // isSpeaking = our proxy is talking (working the deal) → processing.
+  const waveState = callError
+    ? "disconnected"
+    : connected
+    ? (isSpeaking ? "processing" : "listening")
+    : connecting
+    ? "processing"
+    : "idle";
+
+  // Report call lifecycle up so the Savings Counter mirrors simulated mode:
+  // running while connected, done once a completed call disconnects. When a
+  // real call ends, parse its transcript once and post a closing-ledger entry.
+  const hadCall = useRef(false);
+  useEffect(() => {
+    if (connected) hadCall.current = true;
+    const ended = hadCall.current && !connected && !connecting;
+    const s = connected || connecting ? "running" : ended ? "done" : "idle";
+    onStatus?.(s);
+    if (ended && !finalizedRef.current) {
+      finalizedRef.current = true;
+      if (transcriptRef.current.length) {
+        onClose?.(parseClosingEntry(transcriptRef.current, { fallbackName: info?.persona_ref }));
+      }
+    }
+  }, [connected, connecting, onStatus, onClose, info]);
+
   return (
     <>
       <div className="flex items-center justify-between gap-3">
         <span className="label">Session</span>
         <span className="badge badge-neutral shrink-0" role="status">{statusLabel}</span>
+      </div>
+
+      {/* Persistent Audio Waveform — stays visible above the live transcript in
+          the active human-in-the-loop call, mirroring the standby monitor. */}
+      <div className="rounded-lg border border-edge bg-surface p-3">
+        <Waveform state={waveState} />
       </div>
 
       <div className="rounded-lg border border-edge bg-info/5 p-3 text-[13px] text-body">
@@ -143,7 +200,7 @@ function LiveCall({ info, ada }) {
   );
 }
 
-export default function HumanWidget({ info, ada = false }) {
+export default function HumanWidget({ info, ada = false, onPrice, onStatus, onClose }) {
   const agentId = info?.agent_id;
 
   return (
@@ -162,7 +219,7 @@ export default function HumanWidget({ info, ada = false }) {
         </div>
       ) : (
         <ConversationProvider>
-          <LiveCall info={info} ada={ada} />
+          <LiveCall info={info} ada={ada} onPrice={onPrice} onStatus={onStatus} onClose={onClose} />
         </ConversationProvider>
       )}
 
