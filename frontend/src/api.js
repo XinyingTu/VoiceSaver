@@ -154,6 +154,20 @@ export function latestPrice(transcript) {
   return latest;
 }
 
+// Fraud math for the live ledger card. Compares a quote to the 2-bedroom
+// benchmark and returns whether it's a lowball (30%+ below → bait-and-switch
+// risk, not a competitive win) plus the rounded percent below for display. The
+// flag uses the exact ratio; pctBelow is only for the human-readable label, so
+// a quote a dollar above the line isn't flagged even if its percent rounds to 30.
+export function lowballAssessment(price, benchmark = 2200) {
+  if (price == null || !Number.isFinite(price) || !(benchmark > 0)) {
+    return { isLowball: false, pctBelow: null };
+  }
+  const pctBelow = Math.round(((benchmark - price) / benchmark) * 100);
+  const isLowball = price <= benchmark * 0.7; // at or beyond 30% below
+  return { isLowball, pctBelow };
+}
+
 export const uploadVision = async (file, allowDemoFallback = false) => {
   const form = new FormData();
   form.append("file", file);
