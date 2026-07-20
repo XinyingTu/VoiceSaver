@@ -365,4 +365,20 @@ def api_root() -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 _FRONTEND_DIST = ROOT / "frontend" / "dist"
 if _FRONTEND_DIST.is_dir():
-    app.mount("/", StaticFiles(directory=str(_FRONTEND_DIST), html=True), name="frontend")
+    # IMPORTANT: never mount StaticFiles at "/" — a root mount matches EVERY path
+    # (including /api/health), which shadows the API and makes the healthcheck
+    # 404, causing the host to tear the instance down. Instead mount only the
+    # hashed Vite assets and serve index.html from explicit routes. Nothing here
+    # can ever collide with /api/*.
+    app.mount("/assets", StaticFiles(directory=str(_FRONTEND_DIST / "assets")), name="assets")
+
+    @app.get("/", include_in_schema=False)
+    def _spa_index() -> FileResponse:
+        return FileResponse(_FRONTEND_DIST / "index.html")
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    def _favicon() -> FileResponse:
+        icon = _FRONTEND_DIST / "favicon.ico"
+        if icon.is_file():
+            return FileResponse(icon)
+        raise HTTPException(status_code=404, detail="No favicon.")
