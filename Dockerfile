@@ -20,10 +20,13 @@ ENV PYTHONUNBUFFERED=1 \
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Backend source + runtime config/assets.
+# Backend source + runtime config.
 COPY src/ ./src/
 COPY config/ ./config/
-COPY assets/ ./assets/
+
+# Simulated-playback WAVs are generated at runtime (and gitignored, so assets/
+# isn't in the repo). Just create the writable target dirs the generator uses.
+RUN mkdir -p assets/audio frontend/public/audio
 
 # Built frontend from stage 1 (served by FastAPI at "/").
 COPY --from=frontend /app/frontend/dist ./frontend/dist
