@@ -19,8 +19,12 @@ services:
         sync: false
       - key: ELEVENLABS_API_KEY
         sync: false
+      # Public-by-design: this id is sent to every browser and used client-side
+      # to open the live voice session, so it is safe to commit. The agent itself
+      # is public (enable_auth=false) and its 4 tools point at this service's
+      # /api/tools/* webhooks. Rotate/delete the agent after judging if desired.
       - key: ELEVENLABS_AGENT_ID
-        sync: false
+        value: agent_8301kxvzcnchf5ar83csbmy0nynv
       - key: TWILIO_ACCOUNT_SID
         sync: false
       - key: TWILIO_AUTH_TOKEN
