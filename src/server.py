@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 # Load .env so ELEVENLABS_AGENT_ID (and other keys) are visible to the endpoints
@@ -32,7 +33,7 @@ from . import counterparty_channel as channel
 from . import document_parser
 from . import negotiation_tools as T
 from .audio_generator import AUDIO_DIR, generate_all
-from .config_loader import get_profile, load_domain_config, load_job_spec, load_profiles
+from .config_loader import ROOT, get_profile, load_domain_config, load_job_spec, load_profiles
 from .negotiator_agent import build_agent_config, run_session
 from .report_builder import build_report
 
@@ -341,8 +342,8 @@ def audio(profile_id: str) -> FileResponse:
     return FileResponse(path, media_type="audio/wav", filename=path.name)
 
 
-@app.get("/")
-def root() -> dict[str, Any]:
+@app.get("/api")
+def api_root() -> dict[str, Any]:
     return {
         "service": "VoiceSaver — Automated Negotiation Cockpit API",
         "docs": "/docs",
@@ -354,3 +355,14 @@ def root() -> dict[str, Any]:
             "/api/audio/{profile_id}",
         ],
     }
+
+
+# --------------------------------------------------------------------------- #
+# Serve the built frontend from the same origin (production single-service
+# deploy). Mounted LAST so every /api/* route above still takes precedence;
+# StaticFiles(html=True) serves index.html at "/" and the hashed Vite assets.
+# In local dev the frontend runs on Vite (:5173) and this dir may be absent.
+# --------------------------------------------------------------------------- #
+_FRONTEND_DIST = ROOT / "frontend" / "dist"
+if _FRONTEND_DIST.is_dir():
+    app.mount("/", StaticFiles(directory=str(_FRONTEND_DIST), html=True), name="frontend")

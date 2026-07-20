@@ -1,6 +1,15 @@
 // API client for the VoiceSaver FastAPI backend.
+// - If VITE_API_BASE is set, use it (trailing slash stripped).
+// - Otherwise default to same-origin ("") in a production build — the FastAPI
+//   service serves this bundle and the /api/* routes from one domain (Render).
+// - In dev, fall back to the local uvicorn on :8000.
+const _rawBase = import.meta.env?.VITE_API_BASE;
 export const API_BASE =
-  import.meta.env?.VITE_API_BASE?.replace(/\/$/, "") || "http://localhost:8000";
+  _rawBase != null
+    ? _rawBase.replace(/\/$/, "")
+    : import.meta.env?.DEV
+      ? "http://localhost:8000"
+      : "";
 
 async function req(path, options) {
   const res = await fetch(`${API_BASE}${path}`, options);

@@ -1,0 +1,25 @@
+# Keep the build context small & clean.
+.git
+.venv
+venv
+__pycache__
+*.py[cod]
+*.egg-info
+
+frontend/node_modules
+frontend/dist
+frontend/.vite
+
+# Large local media / build artifacts — never needed in the image.
+*.mov
+*.mp4
+*.pdf
+*.docx
+assets/audio/*.wav
+frontend/public/audio/*.wav
+
+.env
+.env.local
+.DS_Store
+*.log
+.claude
