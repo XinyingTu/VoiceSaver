@@ -101,26 +101,76 @@ def get_tool_name(api_key: str, tool_id: str) -> str:
     return resp.json().get("tool_config", {}).get("name", "")
 
 
+def find_tool_id_by_name(api_key: str, name: str) -> str | None:
+    """Return an EXISTING workspace tool_id for `name`, or None.
+
+    Dedup guard: before creating a tool we reuse one already in the library with
+    the same name, so re-running never spawns a duplicate `record_offer_event`.
+    """
+    resp = requests.get(f"{API_ROOT}/tools", headers=_headers(api_key), timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+    tools = data.get("tools", data) if isinstance(data, dict) else data
+    for t in tools if isinstance(tools, list) else []:
+        if not isinstance(t, dict):
+            continue
+        tc = t.get("tool_config", {})
+        if tc.get("name") == name:
+            return t.get("id") or t.get("tool_id") or tc.get("id")
+    return None
+
+
 def update_tool(api_key: str, tool_id: str, payload: dict) -> None:
     resp = requests.patch(f"{API_ROOT}/tools/{tool_id}", headers=_headers(api_key), json=payload, timeout=30)
     if resp.status_code >= 300:
         raise RuntimeError(f"tool update failed HTTP {resp.status_code}: {resp.text}")
 
 
-def update_agent_tools(api_key: str, agent_id: str, tool_payloads: list[dict]) -> None:
-    """PATCH the existing agent's tools in place, matched by name (keeps agent_id)."""
+def update_agent_tools(api_key: str, agent_id: str, tool_payloads: list[dict]) -> list[str]:
+    """Reconcile the existing agent's tools with the local set, matched by NAME,
+    keeping the agent_id. Existing tools are updated in place; a local tool the
+    agent is missing (e.g. a newly-added record_offer_event) is reused from the
+    library if one with that name already exists, otherwise created once, then
+    attached. Returns the ordered, de-duplicated tool_id list the agent should
+    hold, so update_agent_prompt can write it authoritatively.
+
+    Never creates a duplicate tool (dedup by name) and never creates a new agent.
+    """
     by_name = {tp["tool_config"]["name"]: tp for tp in tool_payloads}
-    tool_ids = get_agent_tool_ids(api_key, agent_id)
-    if not tool_ids:
+    existing_ids = get_agent_tool_ids(api_key, agent_id)
+    if not existing_ids:
         raise RuntimeError(f"Agent {agent_id} has no tool_ids to update.")
-    for tool_id in tool_ids:
+
+    desired_ids: list[str] = list(existing_ids)
+    on_agent: set[str] = set()
+
+    # 1) Update every tool already on the agent, in place.
+    for tool_id in existing_ids:
         name = get_tool_name(api_key, tool_id)
+        on_agent.add(name)
         payload = by_name.get(name)
         if not payload:
-            print(f"  skip {tool_id} ({name}): no matching local tool")
+            print(f"  keep    tool {name:<22} -> {tool_id} (no matching local tool)")
             continue
         update_tool(api_key, tool_id, payload)
         print(f"  updated tool {name:<22} -> {tool_id}")
+
+    # 2) Attach any local tool the agent is missing (reuse library id if present).
+    for name, payload in by_name.items():
+        if name in on_agent:
+            continue
+        reuse = find_tool_id_by_name(api_key, name)
+        if reuse:
+            tool_id = reuse
+            update_tool(api_key, tool_id, payload)  # ensure it points at the deployed URL
+            print(f"  attach  tool {name:<22} -> {tool_id} (reused existing library tool)")
+        else:
+            tool_id = create_tool(api_key, payload)
+            print(f"  created tool {name:<22} -> {tool_id}")
+        if tool_id not in desired_ids:
+            desired_ids.append(tool_id)
+
+    return desired_ids
 
 
 def _dynamic_variables_block(dynamic_variables: dict) -> dict:
@@ -134,11 +184,17 @@ def _dynamic_variables_block(dynamic_variables: dict) -> dict:
 
 
 def update_agent_prompt(
-    api_key: str, agent_id: str, system_prompt: str, first_message: str, dynamic_variables: dict
+    api_key: str, agent_id: str, system_prompt: str, first_message: str, dynamic_variables: dict,
+    tool_ids: list[str] | None = None,
 ) -> None:
-    """PATCH the existing agent's system prompt + first message, preserving its tool_ids."""
-    # Re-send the current tool_ids so replacing the prompt object doesn't drop them.
-    tool_ids = get_agent_tool_ids(api_key, agent_id)
+    """PATCH the existing agent's system prompt + first message, preserving its tool_ids.
+
+    Pass `tool_ids` to write an explicit set (e.g. after attaching a new tool);
+    otherwise the agent's current tool_ids are re-sent unchanged.
+    """
+    # Re-send tool_ids so replacing the prompt object doesn't drop them.
+    if tool_ids is None:
+        tool_ids = get_agent_tool_ids(api_key, agent_id)
     payload = {
         "conversation_config": {
             "agent": {
@@ -213,10 +269,10 @@ def main() -> None:
 
     if args.update_agent:
         print(f"Updating existing agent {args.update_agent} to match local config...")
-        update_agent_tools(args.api_key, args.update_agent, tool_payloads)
+        desired_ids = update_agent_tools(args.api_key, args.update_agent, tool_payloads)
         update_agent_prompt(
             args.api_key, args.update_agent, config["system_prompt"],
-            config["first_message"], config["dynamic_variables"],
+            config["first_message"], config["dynamic_variables"], tool_ids=desired_ids,
         )
         print("\nDONE. Tools and system prompt updated in place; agent_id unchanged.")
         return
