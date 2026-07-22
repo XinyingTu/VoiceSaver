@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node test/extractPrice.test.mjs && node test/latestPrice.test.mjs && node test/lowballAssessment.test.mjs && node test/parseClosingEntry.test.mjs && node test/sessionVars.test.mjs"
+    "test": "node test/extractPrice.test.mjs && node test/latestPrice.test.mjs && node test/lowballAssessment.test.mjs && node test/parseClosingEntry.test.mjs && node test/sessionVars.test.mjs && node test/offerState.test.mjs"
   },
   "dependencies": {
     "@elevenlabs/react": "^1.10.1",

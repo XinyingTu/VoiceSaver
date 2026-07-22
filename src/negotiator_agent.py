@@ -149,6 +149,51 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "record_offer_event",
+        "description": (
+            "Record ONE structured vendor-offer movement DURING the call so the live cockpit shows a "
+            "trustworthy price. Call it whenever the dispatcher states or changes a number: their first "
+            "total, a revised total, a confirmed all-in, a base/subtotal, a known mandatory addition, an "
+            "unpriced mandatory fee, a deposit, an optional fee, or a per-unit rate. This does NOT replace "
+            "log_competitor_quote (still the single final record at the close). NEVER label a deposit, "
+            "optional fee, unit rate, benchmark, or a competitor quote as the vendor total."
+        ),
+        "webhook": {"method": "POST", "path": "/api/tools/record_offer_event"},
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "The current session id so events stay isolated per session."},
+                "event": {
+                    "type": "object",
+                    "description": "One structured vendor-offer movement.",
+                    "properties": {
+                        "role": {
+                            "type": "string",
+                            "enum": list(T.OFFER_EVENT_ROLES),
+                            "description": (
+                                "What the amount IS. Use initial_vendor_offer / revised_vendor_offer for the "
+                                "dispatcher's working total, final_confirmed_offer only for a dispatcher-confirmed "
+                                "all-in, known_base_or_subtotal for a base, known_mandatory_addition for a priced "
+                                "mandatory fee, unresolved_mandatory_fee for a named-but-unpriced mandatory fee, "
+                                "and deposit / optional_fee / unit_rate / verified_competitor_quote / "
+                                "market_benchmark for those (which NEVER become the vendor total)."
+                            ),
+                        },
+                        "amount": {"type": "number", "description": "Dollar amount. Required except for unresolved_mandatory_fee. Never send 0 for an unknown fee."},
+                        "fee_key": {"type": "string", "description": "Fee taxonomy key for an addition / unresolved fee, e.g. 'stair_carry_fee'."},
+                        "label": {"type": "string", "description": "Human label for the fee if it has no taxonomy key, e.g. 'coverage'."},
+                        "is_estimate": {"type": "boolean", "description": "True if the total is a non-binding ballpark/estimate."},
+                        "vendor": {"type": "string", "description": "The moving company / dispatcher name."},
+                        "evidence": {"type": "string", "description": "The dispatcher's own words that stated this amount."},
+                        "event_id": {"type": "string", "description": "Optional stable id so repeated sends de-duplicate."},
+                    },
+                    "required": ["role"],
+                },
+            },
+            "required": ["session_id", "event"],
+        },
+    },
+    {
         "name": "check_lowball_flag",
         "description": "Return LOWBALL_FRAUD_RISK if a quote is 30%+ below the benchmark.",
         "webhook": {"method": "POST", "path": "/api/tools/check_lowball_flag"},

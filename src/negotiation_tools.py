@@ -41,6 +41,10 @@ LOWBALL_FRAUD_RISK = "LOWBALL_FRAUD_RISK"
 class Session:
     session_id: str
     logged_quotes: list[dict[str, Any]] = field(default_factory=list)
+    # Structured live offer events (record_offer_event). Kept SEPARATE from
+    # logged_quotes: these represent the vendor's price MOVING during a call
+    # (initial -> revised -> final), which the once-at-close log cannot express.
+    offer_events: list[dict[str, Any]] = field(default_factory=list)
 
     def best_logged_total(self) -> Optional[float]:
         totals = [q["total"] for q in self.logged_quotes if not q.get("lowball_flagged")]
@@ -271,6 +275,209 @@ def log_competitor_quote(session_id: str, quote: dict[str, Any]) -> dict[str, An
 
 def get_logged_quotes(session_id: str) -> list[dict[str, Any]]:
     return list(SESSIONS.get(session_id).logged_quotes)
+
+
+# --------------------------------------------------------------------------- #
+# Tool 5: record_offer_event  (live, structured vendor-offer movement)
+# --------------------------------------------------------------------------- #
+#
+# WHY a separate tool: log_competitor_quote is called ONCE at the close and
+# records the final dossier. It cannot represent the vendor's price MOVING during
+# the call (initial -> revised -> final), nor distinguish a deposit / unit rate /
+# optional fee / competitor quote / benchmark from the vendor's payable total.
+# record_offer_event captures each structured movement so the live UI can show a
+# trustworthy price basis instead of "the last number anyone said". It does NOT
+# replace log_competitor_quote.
+
+# Roles an event's amount can play. These are NEVER interchangeable: a benchmark,
+# a competitor quote, a deposit, an optional fee, and a per-unit rate can never be
+# substituted for the vendor's payable total.
+OFFER_EVENT_ROLES = (
+    "initial_vendor_offer",
+    "revised_vendor_offer",
+    "final_confirmed_offer",
+    "known_base_or_subtotal",
+    "known_mandatory_addition",
+    "unresolved_mandatory_fee",
+    "deposit",
+    "optional_fee",
+    "unit_rate",
+    "verified_competitor_quote",
+    "market_benchmark",
+)
+# Roles whose amount moves the vendor's payable-total basis.
+_VENDOR_TOTAL_ROLES = ("initial_vendor_offer", "revised_vendor_offer", "known_base_or_subtotal", "final_confirmed_offer")
+# The only role that legitimately carries no amount (it is an unpriced fee).
+_NO_AMOUNT_ROLE = "unresolved_mandatory_fee"
+
+
+def record_offer_event(session_id: str, event: dict[str, Any]) -> dict[str, Any]:
+    """
+    Record ONE structured vendor-offer movement for a live call, isolated by
+    session, validated deterministically, and idempotent by ``event_id``.
+
+    ``event`` fields:
+      - role (required): one of OFFER_EVENT_ROLES.
+      - amount: required (and must be a positive number) for every role EXCEPT
+        ``unresolved_mandatory_fee``. Non-positive / non-numeric amounts are
+        rejected — an unknown fee is preserved as unresolved, never coerced to 0.
+      - fee_key / label: identifies the fee for addition/unresolved roles.
+      - vendor / call_id: identify the vendor/call this movement belongs to.
+      - evidence: the transcript line that supports the amount (preserved).
+      - event_id: optional client id for idempotent de-duplication.
+      - is_estimate: marks a working offer as a non-binding estimate.
+
+    Returns the stored event plus the deterministically-derived offer state.
+    """
+    if not session_id:
+        raise ValueError("record_offer_event requires a session_id.")
+    role = event.get("role")
+    if role not in OFFER_EVENT_ROLES:
+        raise ValueError(f"role must be one of {OFFER_EVENT_ROLES}; got {role!r}.")
+
+    amount = event.get("amount")
+    if role == _NO_AMOUNT_ROLE:
+        if not (event.get("fee_key") or event.get("label")):
+            raise ValueError("unresolved_mandatory_fee requires a fee_key or label.")
+        amount = None
+    else:
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError):
+            raise ValueError(f"role {role} requires a numeric amount.")
+        if not (amount > 0):
+            raise ValueError(f"role {role} requires a positive amount; got {amount}.")
+
+    session = SESSIONS.get(session_id)
+
+    # Idempotency: a repeated event_id returns the already-stored event.
+    event_id = event.get("event_id")
+    if event_id:
+        existing = next((e for e in session.offer_events if e.get("event_id") == event_id), None)
+        if existing is not None:
+            return {
+                "recorded": existing,
+                "session_id": session_id,
+                "event_count": len(session.offer_events),
+                "offer_state": derive_offer_state(session.offer_events),
+                "deduped": True,
+            }
+
+    stored = {
+        "event_id": event_id or f"e{len(session.offer_events) + 1:03d}",
+        "role": role,
+        "amount": _round2(amount) if amount is not None else None,
+        "fee_key": event.get("fee_key"),
+        "label": event.get("label"),
+        "vendor": event.get("vendor") or event.get("company") or "unknown",
+        "call_id": event.get("call_id") or "call",
+        "is_estimate": bool(event.get("is_estimate", False)),
+        "evidence": event.get("evidence"),
+    }
+    session.offer_events.append(stored)
+    return {
+        "recorded": stored,
+        "session_id": session_id,
+        "event_count": len(session.offer_events),
+        "offer_state": derive_offer_state(session.offer_events),
+        "deduped": False,
+    }
+
+
+def get_offer_events(session_id: str) -> list[dict[str, Any]]:
+    return list(SESSIONS.get(session_id).offer_events)
+
+
+def derive_offer_state(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """
+    Deterministically fold structured offer events into the authoritative live
+    offer state. This mirrors the frontend reducer (offerState.js) so the two
+    never disagree, and gives the backend guard a testable surface. Roles that
+    are not a vendor payable total (benchmark, competitor, deposit, optional,
+    unit rate) never move the total.
+    """
+    initial_total: Optional[float] = None
+    known_base: Optional[float] = None
+    all_in = False
+    latest_is_estimate = False
+    additions: list[dict[str, Any]] = []
+    unresolved: list[str] = []
+    deposit: Optional[float] = None
+    optional_fees: list[dict[str, Any]] = []
+    unit_rates: list[dict[str, Any]] = []
+
+    for ev in events:
+        role = ev.get("role")
+        amt = ev.get("amount")
+        if role in _VENDOR_TOTAL_ROLES:
+            if amt is None:
+                continue
+            if initial_total is None:
+                initial_total = amt
+            known_base = amt
+            if role == "final_confirmed_offer":
+                all_in = True
+                # An all-in restatement subsumes the earlier itemized lines — do
+                # not add them again on top of it (mirrors offerState.js).
+                additions = []
+            latest_is_estimate = bool(ev.get("is_estimate")) and role != "final_confirmed_offer"
+        elif role == "known_mandatory_addition":
+            key = ev.get("fee_key") or ev.get("label")
+            if amt is not None:
+                additions.append({"key": key, "label": ev.get("label") or key, "amount": amt})
+                unresolved = [u for u in unresolved if u != key]
+            elif key and key not in unresolved:
+                unresolved.append(key)
+        elif role == "unresolved_mandatory_fee":
+            key = ev.get("fee_key") or ev.get("label")
+            if key and key not in unresolved and not any(a["key"] == key for a in additions):
+                unresolved.append(key)
+        elif role == "deposit":
+            deposit = amt
+        elif role == "optional_fee":
+            optional_fees.append({"label": ev.get("label") or "optional", "amount": amt})
+        elif role == "unit_rate":
+            unit_rates.append({"label": ev.get("label") or "rate", "amount": amt})
+        # verified_competitor_quote / market_benchmark: never touch the total.
+
+    current_known_total = (
+        _round2(known_base + sum(a["amount"] for a in additions)) if known_base is not None else None
+    )
+    has_unresolved = len(unresolved) > 0
+    final_confirmed_total = current_known_total if (all_in and not has_unresolved and current_known_total is not None) else None
+    negotiated_savings = (
+        _round2(initial_total - known_base)
+        if (initial_total is not None and known_base is not None and known_base < initial_total)
+        else None
+    )
+
+    if known_base is None:
+        price_basis = "awaiting"
+    elif has_unresolved:
+        price_basis = "known_base_plus_unresolved_fees"
+    elif all_in:
+        price_basis = "all_in_confirmed"
+    elif latest_is_estimate:
+        price_basis = "estimate"
+    else:
+        price_basis = "working_offer"
+
+    return {
+        "initial_total": initial_total,
+        "known_base": known_base,
+        "current_known_total": current_known_total,
+        "final_confirmed_total": final_confirmed_total,
+        "price_basis": price_basis,
+        "mandatory_additions": additions,
+        "unresolved_fees": unresolved,
+        "deposit": deposit,
+        "optional_fees": optional_fees,
+        "unit_rates": unit_rates,
+        "negotiated_savings": negotiated_savings,
+        # A total-only structured stream is never itemized; only real vendor line
+        # items (via log_competitor_quote) make a quote itemized.
+        "is_itemized": False,
+    }
 
 
 # --------------------------------------------------------------------------- #

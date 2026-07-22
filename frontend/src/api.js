@@ -54,6 +54,15 @@ export const runSession = (body) => jsonPost("/api/session/run", body);
 export const getPriceBenchmark = (jobSpec, vertical = "moving_services") =>
   jsonPost("/api/tools/get_price_benchmark", { vertical, job_spec: jobSpec });
 
+// Authoritative live-offer read path. The hosted ElevenLabs agent calls the
+// SERVER/webhook tool record_offer_event, which the backend validates and stores
+// in the session; the browser reads that stored state here (there is no browser
+// callback for a server-side tool). Returns { session_id, offer_events,
+// offer_state }. Empty offer_events => the structured path is not active yet and
+// the UI uses its labeled transcript fallback.
+export const fetchOfferState = (sessionId) =>
+  req(`/api/tools/offer_events/${encodeURIComponent(sessionId)}`);
+
 // Pull the dollar figure on the table out of a live transcript line. The
 // ElevenLabs tool webhooks (log_competitor_quote / calculate_discount) fire
 // server-side, but the spoken price they act on is present in the conversation,
@@ -145,13 +154,13 @@ export function parseClosingEntry(transcript, { fallbackName = "Dispatcher" } = 
   return { name, price, outcome, outcomeLabel: OUTCOME_LABEL[outcome], evidence };
 }
 
-// Transcript price fallback for the live "Current Target Bid". Scans the whole
-// spoken transcript (dispatcher AND proxy lines) and returns the latest credible
-// dollar total, or null if none has been spoken yet. This is the authoritative
-// source for the live counter: the ElevenLabs tool webhooks fire server-side and
-// may miss/mangle total_price, but the number on the table is right here in the
-// words — so we read it straight from the transcript and never blank once a
-// figure has been said. Accepts [{ text }] lines or bare strings. Pure + tested.
+// DEPRECATED as a price source. This scans the whole transcript (BOTH speakers)
+// and returns the last credible dollar figure — which is exactly the behavior
+// that let a deposit, a unit rate, or the proxy's own competitor quote become
+// "the price". The authoritative live number now comes from the structured
+// OfferState in offerState.js (deriveLiveOffer over dispatcher lines only, plus
+// record_offer_event). latestPrice is retained ONLY for the legacy unit test and
+// must not drive UI state. Accepts [{ text }] lines or bare strings.
 export function latestPrice(transcript) {
   const lines = Array.isArray(transcript) ? transcript : [];
   let latest = null;
@@ -163,12 +172,15 @@ export function latestPrice(transcript) {
   return latest;
 }
 
-// Fraud math for the live ledger card. Compares a quote to the 2-bedroom
-// benchmark and returns whether it's a lowball (30%+ below → bait-and-switch
-// risk, not a competitive win) plus the rounded percent below for display. The
-// flag uses the exact ratio; pctBelow is only for the human-readable label, so
-// a quote a dollar above the line isn't flagged even if its percent rounds to 30.
-export function lowballAssessment(price, benchmark = 2200) {
+// Fraud math for the live ledger card. Compares a quote to the JOB-SPECIFIC
+// benchmark (passed in — there is NO hard-coded 2BR fallback, so the counter,
+// warning, and ledger all use the same job benchmark) and returns whether it's
+// a lowball (30%+ below → bait-and-switch risk, not a competitive win) plus the
+// rounded percent below for display. A missing/invalid benchmark yields no
+// assessment rather than silently substituting a stale fixture value. The flag
+// uses the exact ratio; pctBelow is only for the human-readable label, so a
+// quote a dollar above the line isn't flagged even if its percent rounds to 30.
+export function lowballAssessment(price, benchmark) {
   if (price == null || !Number.isFinite(price) || !(benchmark > 0)) {
     return { isLowball: false, pctBelow: null };
   }

@@ -125,6 +125,11 @@ class LogQuoteBody(BaseModel):
     quote: dict[str, Any]
 
 
+class RecordOfferEventBody(BaseModel):
+    session_id: str
+    event: dict[str, Any]
+
+
 class LowballBody(BaseModel):
     quote_total: float
     benchmark_total: Optional[float] = None
@@ -286,6 +291,27 @@ def tool_check_lowball_flag(body: LowballBody) -> dict[str, Any]:
 @app.post("/api/tools/classify_outcome")
 def tool_classify_outcome(body: ClassifyBody) -> dict[str, Any]:
     return T.classify_outcome(body.transcript_so_far, signals=body.signals)
+
+
+@app.post("/api/tools/record_offer_event")
+def tool_record_offer_event(body: RecordOfferEventBody) -> dict[str, Any]:
+    """Record one structured vendor-offer movement for the live call.
+
+    Distinct from log_competitor_quote (final dossier): this captures the price
+    MOVING during the call so the live UI shows a trustworthy price basis. The
+    hosted ElevenLabs agent must be configured with this tool for it to fire on a
+    real call; until then the frontend uses its labeled transcript fallback.
+    """
+    try:
+        return T.record_offer_event(body.session_id, body.event)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.get("/api/tools/offer_events/{session_id}")
+def tool_offer_events(session_id: str) -> dict[str, Any]:
+    events = T.get_offer_events(session_id)
+    return {"session_id": session_id, "offer_events": events, "offer_state": T.derive_offer_state(events)}
 
 
 @app.get("/api/tools/logged_quotes/{session_id}")

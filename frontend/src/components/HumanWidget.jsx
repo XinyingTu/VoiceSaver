@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ConversationProvider, useConversation } from "@elevenlabs/react";
 import Waveform from "./Waveform.jsx";
-import { latestPrice, parseClosingEntry } from "../api.js";
+import { parseClosingEntry, fetchOfferState } from "../api.js";
+import { emptyOfferState, deriveLiveOffer, offerStateFromEvents } from "../offerState.js";
 import { buildSessionDynamicVariables } from "../sessionVars.js";
 
 // Human-in-the-loop live voice via the ElevenLabs React SDK (not the embed
@@ -9,6 +10,25 @@ import { buildSessionDynamicVariables } from "../sessionVars.js";
 // onMessage, pass the ADA Shield state as a dynamic variable so the UI toggle
 // controls disclosure at call time, and capture the mic directly (no
 // cross-origin iframe / allow-attribute juggling).
+//
+// PRICE STATE: the transcript is EVIDENCE, not the price. The live counter is
+// driven by the authoritative OfferState (offerState.js), fed by ONE of two
+// producers, in this order of authority:
+//   1. AUTHORITATIVE server path. record_offer_event is a SERVER/webhook tool
+//      (configure_elevenlabs_agent.py registers every tool as type "webhook"),
+//      so on a real call ElevenLabs' servers POST the event straight to FastAPI
+//      — there is NO browser tool callback. The backend validates + stores it
+//      per session; this widget READS that stored state by polling
+//      /api/tools/offer_events/{session_id} and folds it into OfferState. It
+//      requires the hosted agent to be configured with the tool; until then the
+//      poll returns no events and (2) drives the UI.
+//   2. FALLBACK. A conservative, dispatcher-lines-only transcript classifier
+//      (provisional) — it never reads the proxy's own lines, and distinguishes a
+//      vendor total from a deposit / unit rate / optional fee / competitor quote.
+//
+// We do NOT register record_offer_event as a client tool and do NOT rely on
+// onAgentToolRequest: that would be a second, competing path against a tool that
+// actually executes server-side.
 //
 // useConversation must live inside a <ConversationProvider>, so the interactive
 // call UI is split into <LiveCall> mounted under the provider below.
@@ -22,18 +42,39 @@ function toLine(msg, id) {
   return { id, isProxy: source === "ai" || source === "agent", text };
 }
 
-function LiveCall({ info, spec, sessionId, ada, onPrice, onStatus, onClose }) {
+function LiveCall({ info, spec, sessionId, ada, benchmark, onOffer, onStatus, onClose }) {
   const agentId = info?.agent_id;
   const [transcript, setTranscript] = useState([]);
   const [callError, setCallError] = useState(null);
   const seqRef = useRef(0);
   const scrollRef = useRef(null);
-  // Last price surfaced live, so we can flag a downward concession vs. an upcharge.
-  const lastPriceRef = useRef(null);
-  // Latest transcript for the end-of-call parser (avoids stale-closure reads in
-  // the lifecycle effect), plus a guard so we close the ledger entry only once.
+  // Latest transcript for parsing (avoids stale-closure reads), structured
+  // events (authoritative when present), the last known total (for the drop
+  // flash), the latest computed offer (for the closing entry), a monotonic call
+  // counter (for an idempotent closing-ledger key), and a finalize guard.
   const transcriptRef = useRef([]);
+  // Backend-stored structured offer events (authoritative), as last fetched from
+  // /api/tools/offer_events/{session_id}. Empty until the hosted agent's webhook
+  // tool has recorded any — then it supersedes the transcript fallback.
+  const structuredEventsRef = useRef([]);
+  const lastTotalRef = useRef(null);
+  const offerRef = useRef(emptyOfferState(benchmark));
+  const callSeqRef = useRef(0);
   const finalizedRef = useRef(false);
+
+  // Recompute the authoritative offer from whichever producer is active and
+  // push it up. Backend structured events supersede the transcript fallback.
+  const recomputeOffer = useCallback(() => {
+    const offer = structuredEventsRef.current.length
+      ? offerStateFromEvents(structuredEventsRef.current, { benchmark })
+      : deriveLiveOffer(transcriptRef.current, { benchmark });
+    offerRef.current = offer;
+    const cur = offer.finalConfirmedTotal ?? offer.currentKnownTotal;
+    const prev = lastTotalRef.current;
+    const isDrop = prev != null && cur != null && cur < prev;
+    if (cur != null) lastTotalRef.current = cur;
+    onOffer?.({ offer, isDrop });
+  }, [benchmark, onOffer]);
 
   const conversation = useConversation({
     onMessage: (msg) => {
@@ -42,18 +83,7 @@ function LiveCall({ info, spec, sessionId, ada, onPrice, onStatus, onClose }) {
       const line = toLine(msg, (seqRef.current += 1));
       transcriptRef.current = [...transcriptRef.current, line];
       setTranscript((prev) => [...prev, line]);
-      // Force-feed the live number on the table to the Savings Counter. The tool
-      // webhooks fire server-side and may miss/mangle total_price, so we don't
-      // depend on them: rescan the WHOLE spoken transcript for the latest credible
-      // total and push it up. Once any price is spoken the counter shows it and
-      // never blanks; a line with no number leaves the last price in place.
-      const price = latestPrice(transcriptRef.current);
-      if (price != null && price !== lastPriceRef.current && onPrice) {
-        const prev = lastPriceRef.current;
-        const isDrop = prev != null && price < prev;
-        lastPriceRef.current = price;
-        onPrice({ price, isDrop });
-      }
+      recomputeOffer();
     },
     onError: (err) => setCallError(typeof err === "string" ? err : err?.message || "Conversation error."),
   });
@@ -67,14 +97,51 @@ function LiveCall({ info, spec, sessionId, ada, onPrice, onStatus, onClose }) {
     if (el) el.scrollTop = el.scrollHeight;
   }, [transcript]);
 
+  // If the benchmark arrives after the call starts, recompute so lowball risk
+  // uses the job benchmark rather than staying unassessed.
+  useEffect(() => {
+    if (transcriptRef.current.length || structuredEventsRef.current.length) recomputeOffer();
+  }, [benchmark, recomputeOffer]);
+
+  // AUTHORITATIVE read path: poll the backend session for structured offer events
+  // the hosted agent's server webhook tool recorded. The backend list is already
+  // validated + de-duplicated, so we replace our copy wholesale each poll. When
+  // it is empty (agent not yet configured with the tool), the transcript fallback
+  // keeps driving the counter.
+  const pollOfferState = useCallback(async () => {
+    if (!sessionId) return;
+    try {
+      const res = await fetchOfferState(sessionId);
+      const events = res?.offer_events || [];
+      if (events.length) {
+        structuredEventsRef.current = events;
+        recomputeOffer();
+      }
+    } catch {
+      /* transient network error — keep the last-known state */
+    }
+  }, [sessionId, recomputeOffer]);
+
+  useEffect(() => {
+    if (!connected || !sessionId) return undefined;
+    pollOfferState(); // fetch immediately on connect
+    const id = setInterval(pollOfferState, 2500);
+    return () => clearInterval(id);
+  }, [connected, sessionId, pollOfferState]);
+
   const start = useCallback(async () => {
     setCallError(null);
     setTranscript([]);
     seqRef.current = 0;
-    lastPriceRef.current = null;
     transcriptRef.current = [];
+    structuredEventsRef.current = [];
+    lastTotalRef.current = null;
+    offerRef.current = emptyOfferState(benchmark);
+    callSeqRef.current += 1;
     finalizedRef.current = false;
-    onPrice?.({ reset: true });
+    // Reset the counter to a clean AWAITING state for the new call — no stale
+    // price from a previous call bleeds in.
+    onOffer?.({ reset: true, offer: emptyOfferState(benchmark) });
     try {
       // Prompt for the mic explicitly so a denial surfaces a clear message
       // instead of a generic SDK failure. Release this probe stream right away —
@@ -83,10 +150,7 @@ function LiveCall({ info, spec, sessionId, ada, onPrice, onStatus, onClose }) {
       probe.getTracks().forEach((t) => t.stop());
       // dynamicVariables drive the runtime placeholders in the agent prompt so
       // the UI controls the call at start time: {{job_spec_json}} carries the
-      // CURRENT locked spec (P0 fix — the agent must describe the edited job,
-      // not the seeded fixture) and {{ada_shield_active}} the disclosure toggle.
-      // Built here from the live spec prop so every session reflects the newest
-      // lock. Strings/JSON-string match what ElevenLabs runtime variables accept.
+      // CURRENT locked spec and {{ada_shield_active}} the disclosure toggle.
       startSession({
         agentId,
         connectionType: "webrtc",
@@ -99,7 +163,7 @@ function LiveCall({ info, spec, sessionId, ada, onPrice, onStatus, onClose }) {
           : e?.message || "Could not start the conversation."
       );
     }
-  }, [startSession, agentId, ada, spec, sessionId]);
+  }, [startSession, agentId, ada, spec, sessionId, benchmark, onOffer]);
 
   // End the session if the widget unmounts mid-call.
   useEffect(() => () => { try { endSession(); } catch { /* not connected */ } }, [endSession]);
@@ -109,7 +173,6 @@ function LiveCall({ info, spec, sessionId, ada, onPrice, onStatus, onClose }) {
     : connecting ? "◌ connecting" : "○ standby";
 
   // Drive the persistent waveform + the shared savings-counter status.
-  // isSpeaking = our proxy is talking (working the deal) → processing.
   const waveState = callError
     ? "disconnected"
     : connected
@@ -119,8 +182,10 @@ function LiveCall({ info, spec, sessionId, ada, onPrice, onStatus, onClose }) {
     : "idle";
 
   // Report call lifecycle up so the Savings Counter mirrors simulated mode:
-  // running while connected, done once a completed call disconnects. When a
-  // real call ends, parse its transcript once and post a closing-ledger entry.
+  // running while connected, done once a completed call disconnects. When a real
+  // call ends, build ONE closing-ledger entry from the authoritative offer state
+  // (plus the dispatcher name + evidence line) and post it exactly once. The
+  // stable callKey lets App dedupe if the disconnect path fires repeatedly.
   const hadCall = useRef(false);
   useEffect(() => {
     if (connected) hadCall.current = true;
@@ -129,11 +194,25 @@ function LiveCall({ info, spec, sessionId, ada, onPrice, onStatus, onClose }) {
     onStatus?.(s);
     if (ended && !finalizedRef.current) {
       finalizedRef.current = true;
-      if (transcriptRef.current.length) {
-        onClose?.(parseClosingEntry(transcriptRef.current, { fallbackName: info?.persona_ref }));
-      }
+      // One last authoritative fetch so the closing entry reflects any events
+      // recorded right before disconnect, then post exactly once.
+      (async () => {
+        await pollOfferState();
+        if (!transcriptRef.current.length && !structuredEventsRef.current.length) return;
+        const parsed = parseClosingEntry(transcriptRef.current, { fallbackName: info?.persona_ref });
+        const offer = offerRef.current;
+        const evidence =
+          offer.evidence.currentKnownTotal || offer.evidence.initialTotal || parsed.evidence || "";
+        onClose?.({
+          callKey: `${sessionId || "session"}:${callSeqRef.current}`,
+          name: parsed.name,
+          evidence,
+          fraudPhrase: parsed.outcome === "LOWBALL_FRAUD",
+          ...offer,
+        });
+      })();
     }
-  }, [connected, connecting, onStatus, onClose, info]);
+  }, [connected, connecting, onStatus, onClose, info, sessionId, pollOfferState]);
 
   return (
     <>
@@ -207,7 +286,7 @@ function LiveCall({ info, spec, sessionId, ada, onPrice, onStatus, onClose }) {
   );
 }
 
-export default function HumanWidget({ info, spec, sessionId, ada = false, onPrice, onStatus, onClose }) {
+export default function HumanWidget({ info, spec, sessionId, ada = false, benchmark = null, onOffer, onStatus, onClose }) {
   const agentId = info?.agent_id;
 
   return (
@@ -231,7 +310,8 @@ export default function HumanWidget({ info, spec, sessionId, ada = false, onPric
             spec={spec}
             sessionId={sessionId}
             ada={ada}
-            onPrice={onPrice}
+            benchmark={benchmark}
+            onOffer={onOffer}
             onStatus={onStatus}
             onClose={onClose}
           />

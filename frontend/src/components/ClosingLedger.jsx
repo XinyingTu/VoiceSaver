@@ -1,16 +1,27 @@
 import React from "react";
 import LedgerCard from "./LedgerCard.jsx";
 import LiveLedgerCard from "./LiveLedgerCard.jsx";
+import { isComparisonReady } from "../offerState.js";
 
-// Rank live human-in-the-loop entries: lowest secured price wins, entries with
-// no price (in-progress) sink to the bottom in arrival order.
+// Rank live human-in-the-loop entries by ELIGIBILITY, not by whichever number is
+// smallest: comparison-ready quotes (usable payable total, not a lowball, no
+// unresolved mandatory fees) rank first by payable ascending; everything else
+// (lowballs, incomplete/estimate/declined/callback) sinks below in arrival order.
+function payableOf(e) {
+  return e.finalConfirmedTotal ?? e.currentKnownTotal ?? Infinity;
+}
 function rankLive(entries) {
   return [...entries]
     .sort((a, b) => {
-      const ap = a.price == null ? Infinity : a.price;
-      const bp = b.price == null ? Infinity : b.price;
-      if (ap !== bp) return ap - bp;
-      return a.id - b.id;
+      const ae = isComparisonReady(a);
+      const be = isComparisonReady(b);
+      if (ae !== be) return ae ? -1 : 1; // eligible first
+      if (ae && be) {
+        const ap = payableOf(a);
+        const bp = payableOf(b);
+        if (ap !== bp) return ap - bp;
+      }
+      return a.id - b.id; // stable by arrival
     })
     .map((e, i) => ({ ...e, rank: i + 1 }));
 }

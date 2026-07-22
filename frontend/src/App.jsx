@@ -18,6 +18,7 @@ import CallMonitor from "./components/CallMonitor.jsx";
 import HumanWidget from "./components/HumanWidget.jsx";
 import TargetBid from "./components/TargetBid.jsx";
 import ClosingLedger from "./components/ClosingLedger.jsx";
+import { emptyOfferState, appendLedgerEntry, bestComparableOffer } from "./offerState.js";
 
 export default function App() {
   const [spec, setSpec] = useState({ inventory_items: [] });
@@ -35,7 +36,9 @@ export default function App() {
   const [report, setReport] = useState(null);
   const [humanWidget, setHumanWidget] = useState(null);
   // Live savings feed for human-in-the-loop mode (no simulated report to read).
-  const [humanPrice, setHumanPrice] = useState({ current: null, seq: 0, best: null });
+  // The authoritative OfferState is the source; `seq` bumps on a downward move
+  // to trigger the flash animation.
+  const [humanOffer, setHumanOffer] = useState({ offer: emptyOfferState(null), seq: 0 });
   const [humanStatus, setHumanStatus] = useState("idle");
   const [humanBenchmark, setHumanBenchmark] = useState(null);
   // Closing ledger for live human-in-the-loop calls: each finished call is
@@ -50,16 +53,24 @@ export default function App() {
   const playback = useSessionPlayback(session);
   const running = playback.status === "running";
 
+  // Best comparison-ready offer across finished live calls AND the in-flight one
+  // — eligibility-filtered (no lowballs, no unresolved-fee bases, no
+  // declines/callbacks/estimates), never merely the smallest number.
+  const bestEntry = humanWidget
+    ? bestComparableOffer([...humanLedger, humanOffer.offer].filter(Boolean))
+    : null;
+  const bestComparable = bestEntry ? bestEntry.finalConfirmedTotal ?? bestEntry.currentKnownTotal : null;
+
   // One savings feed for the counter, whichever channel is live: the simulated
-  // playback (with its report) or the human-in-the-loop conversation.
+  // playback (report-driven, legacy props) or the human-in-the-loop conversation
+  // (authoritative OfferState via the `offer` prop).
   const feed = humanWidget
     ? {
-        currentBid: humanPrice.current,
-        priceDropSeq: humanPrice.seq,
+        offer: humanOffer.offer,
+        priceDropSeq: humanOffer.seq,
         benchmark: humanBenchmark,
-        bestItemized: humanPrice.best,
+        bestComparable,
         status: humanStatus,
-        savings: null,
       }
     : {
         currentBid: playback.currentBid,
@@ -97,30 +108,27 @@ export default function App() {
 
   const onField = (key, value) => setSpec((prev) => ({ ...prev, [key]: value }));
 
-  // Live price surfaced from the human-in-the-loop conversation. Tracks the
-  // number on the table, counts downward concessions (drives the odometer
-  // tumble), and keeps the best (lowest) figure secured so far.
-  const onHumanPrice = useCallback((p) => {
+  // Authoritative live offer surfaced from the human-in-the-loop conversation.
+  // The whole OfferState flows up; `seq` bumps on a genuine downward move so the
+  // counter can flash. A `reset` clears the counter to AWAITING for a new call.
+  const onHumanOffer = useCallback((p) => {
     if (p?.reset) {
-      setHumanPrice({ current: null, seq: 0, best: null });
+      setHumanOffer({ offer: p.offer || emptyOfferState(null), seq: 0 });
       return;
     }
-    setHumanPrice((prev) => ({
-      current: p.price,
-      seq: p.isDrop ? prev.seq + 1 : prev.seq,
-      best: prev.best == null ? p.price : Math.min(prev.best, p.price),
-    }));
+    setHumanOffer((prev) => ({ offer: p.offer, seq: p.isDrop ? prev.seq + 1 : prev.seq }));
   }, []);
   const onHumanStatus = useCallback((s) => setHumanStatus(s), []);
 
-  // A live call ended: append its parsed entry to the closing ledger.
+  // A live call ended: append its authoritative closing entry ONCE (idempotent
+  // by callKey, so a repeated disconnect/finalize callback does not double-add).
   const onHumanClose = useCallback((entry) => {
     if (!entry) return;
-    setHumanLedger((prev) => [...prev, { ...entry, id: prev.length + 1 }]);
+    setHumanLedger((prev) => appendLedgerEntry(prev, { ...entry, id: prev.length + 1 }));
   }, []);
 
   const resetHumanFeed = () => {
-    setHumanPrice({ current: null, seq: 0, best: null });
+    setHumanOffer({ offer: emptyOfferState(null), seq: 0 });
     setHumanStatus("idle");
     setHumanBenchmark(null);
     setHumanLedger([]);
@@ -295,7 +303,8 @@ export default function App() {
             spec={spec}
             sessionId={sessionId}
             ada={ada}
-            onPrice={onHumanPrice}
+            benchmark={humanBenchmark}
+            onOffer={onHumanOffer}
             onStatus={onHumanStatus}
             onClose={onHumanClose}
           />
@@ -309,14 +318,7 @@ export default function App() {
         )}
 
         <div className="flex flex-col gap-4">
-          <TargetBid
-            currentBid={feed.currentBid}
-            priceDropSeq={feed.priceDropSeq}
-            benchmark={feed.benchmark}
-            bestItemized={feed.bestItemized}
-            savings={feed.savings}
-            status={feed.status}
-          />
+          <TargetBid {...feed} />
           <ClosingLedger
             report={report}
             completedProfileIds={playback.completedProfileIds}
