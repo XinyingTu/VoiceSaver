@@ -68,7 +68,12 @@ _JOB_SPEC_SCHEMA = {
 
 _FEE_LINE_ITEMS_SCHEMA = {
     "type": "object",
-    "description": "The quote broken into named fee line items in dollars. Use 0 for any fee not offered.",
+    "description": (
+        "The quote broken into named fee line items in dollars. Enter only amounts the "
+        "dispatcher actually stated; use 0 ONLY for a fee explicitly quoted as $0 or waived. "
+        "Do NOT invent a 0 for a fee that was never mentioned — leave those unconfirmed fees "
+        "out and treat the quote as incomplete rather than fabricating a number."
+    ),
     "properties": {
         "base_labor_fee": {"type": "number", "description": "Base labor fee in dollars."},
         "mileage_fee": {"type": "number", "description": "Mileage fee in dollars."},
