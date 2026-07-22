@@ -19,9 +19,9 @@ Rules enforced:
      {{ada_shield_active}} (so the UI toggle controls it at call time), not a
      value baked in at configure time.
   5. The system prompt carries the STRICT STOP-LOOPING & FRAUD PROTOCOL: a
-     two-strike cap on breakdown asks, a sub-$500 fraud rapid-exit, and a
-     two-sentence brevity ceiling. These stop the agent looping / haggling a
-     scam quote on a live call.
+     two-strike cap on breakdown asks, a benchmark-driven (LOWBALL_FRAUD_RISK)
+     fraud rapid-exit, and a two-sentence brevity ceiling. These stop the agent
+     looping / haggling a scam quote on a live call.
 
 Usage:
     python scripts/check_realism_rules.py
@@ -98,19 +98,25 @@ def check() -> int:
         if hit:
             _fail(errors, f"ADA OFF: proxy leaked accessibility language ({hit.group(0)!r}): {m['text']!r}")
 
-    # --- Rule 4: live-agent prompt uses the {{ada_shield_active}} runtime var. -
+    # --- Rule 4: live-agent prompt uses the runtime variables (not baked). -----
     prompt = build_agent_config(ada_shield_active=False)["system_prompt"]
     if "{{ada_shield_active}}" not in prompt:
         _fail(errors, "Prompt must reference the ElevenLabs runtime variable {{ada_shield_active}}.")
     # The flag must NOT be baked to a literal True/False in the rendered prompt.
     if re.search(r"ACTIVE\s*=\s*(True|False)\b", prompt):
         _fail(errors, "Prompt bakes a literal ADA value; it must stay a runtime variable so the toggle controls it.")
+    # The job spec must ALSO stay a runtime variable so the edited/locked spec
+    # drives every live call (P0 fix). It must not be str-replaced into the prompt.
+    if "{{job_spec_json}}" not in prompt:
+        _fail(errors, "Prompt must reference the ElevenLabs runtime variable {{job_spec_json}} (not a baked spec).")
 
     # --- Rule 5: STRICT STOP-LOOPING & FRAUD PROTOCOL is present in the prompt. -
     protocol_anchors = {
         "protocol header": "STOP-LOOPING & FRAUD PROTOCOL",
-        "two-strike cap": "twice",         # never ask for the breakdown more than twice
-        "sub-$500 fraud floor": "$500",    # rapid-exit threshold for a scam-level quote
+        "two-strike cap": "twice",              # never ask for the breakdown more than twice
+        # Rapid-exit is now benchmark-driven, not a fixed dollar cutoff tied to the
+        # original Daniel job: the scam test is a LOWBALL_FRAUD_RISK on this job's benchmark.
+        "benchmark-driven fraud floor": "LOWBALL_FRAUD_RISK",
         "brevity ceiling": "two sentences",
         "anti-repetition rule": "ANTI-REPETITION",  # no repeating a sentence within one turn
     }

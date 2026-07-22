@@ -292,6 +292,8 @@ export default function App() {
         {humanWidget ? (
           <HumanWidget
             info={humanWidget}
+            spec={spec}
+            sessionId={sessionId}
             ada={ada}
             onPrice={onHumanPrice}
             onStatus={onHumanStatus}

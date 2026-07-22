@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ConversationProvider, useConversation } from "@elevenlabs/react";
 import Waveform from "./Waveform.jsx";
 import { latestPrice, parseClosingEntry } from "../api.js";
+import { buildSessionDynamicVariables } from "../sessionVars.js";
 
 // Human-in-the-loop live voice via the ElevenLabs React SDK (not the embed
 // widget). useConversation lets us: render our own real-time transcript from
@@ -21,7 +22,7 @@ function toLine(msg, id) {
   return { id, isProxy: source === "ai" || source === "agent", text };
 }
 
-function LiveCall({ info, ada, onPrice, onStatus, onClose }) {
+function LiveCall({ info, spec, sessionId, ada, onPrice, onStatus, onClose }) {
   const agentId = info?.agent_id;
   const [transcript, setTranscript] = useState([]);
   const [callError, setCallError] = useState(null);
@@ -80,12 +81,16 @@ function LiveCall({ info, ada, onPrice, onStatus, onClose }) {
       // the SDK opens its own; leaving this one live would hold the mic open.
       const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
       probe.getTracks().forEach((t) => t.stop());
-      // dynamicVariables drives {{ada_shield_active}} in the agent prompt so the
-      // UI toggle controls disclosure at call time. Strings match ElevenLabs.
+      // dynamicVariables drive the runtime placeholders in the agent prompt so
+      // the UI controls the call at start time: {{job_spec_json}} carries the
+      // CURRENT locked spec (P0 fix — the agent must describe the edited job,
+      // not the seeded fixture) and {{ada_shield_active}} the disclosure toggle.
+      // Built here from the live spec prop so every session reflects the newest
+      // lock. Strings/JSON-string match what ElevenLabs runtime variables accept.
       startSession({
         agentId,
         connectionType: "webrtc",
-        dynamicVariables: { ada_shield_active: ada ? "true" : "false" },
+        dynamicVariables: buildSessionDynamicVariables(spec, sessionId, ada),
       });
     } catch (e) {
       setCallError(
@@ -94,7 +99,7 @@ function LiveCall({ info, ada, onPrice, onStatus, onClose }) {
           : e?.message || "Could not start the conversation."
       );
     }
-  }, [startSession, agentId, ada]);
+  }, [startSession, agentId, ada, spec, sessionId]);
 
   // End the session if the widget unmounts mid-call.
   useEffect(() => () => { try { endSession(); } catch { /* not connected */ } }, [endSession]);
@@ -202,7 +207,7 @@ function LiveCall({ info, ada, onPrice, onStatus, onClose }) {
   );
 }
 
-export default function HumanWidget({ info, ada = false, onPrice, onStatus, onClose }) {
+export default function HumanWidget({ info, spec, sessionId, ada = false, onPrice, onStatus, onClose }) {
   const agentId = info?.agent_id;
 
   return (
@@ -221,7 +226,15 @@ export default function HumanWidget({ info, ada = false, onPrice, onStatus, onCl
         </div>
       ) : (
         <ConversationProvider>
-          <LiveCall info={info} ada={ada} onPrice={onPrice} onStatus={onStatus} onClose={onClose} />
+          <LiveCall
+            info={info}
+            spec={spec}
+            sessionId={sessionId}
+            ada={ada}
+            onPrice={onPrice}
+            onStatus={onStatus}
+            onClose={onClose}
+          />
         </ConversationProvider>
       )}
 

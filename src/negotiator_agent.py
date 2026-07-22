@@ -51,9 +51,11 @@ _JOB_SPEC_SCHEMA = {
     "type": "object",
     "description": "The locked job specification for this move; describe it identically on every call.",
     "properties": {
-        "household_size": {"type": "string", "description": "Household size, e.g. '2_bedroom'."},
-        "origin_label": {"type": "string", "description": "Origin city/state, e.g. 'Rock Hill, SC'."},
-        "destination_label": {"type": "string", "description": "Destination city/state, e.g. 'Charlotte, NC'."},
+        "household_size": {"type": "string", "description": "Household size from the runtime job spec, e.g. '3_bedroom'."},
+        "origin_zip": {"type": "string", "description": "Origin ZIP code from the runtime job spec."},
+        "origin_label": {"type": "string", "description": "Origin city/state if present in the runtime job spec; otherwise use origin_zip."},
+        "destination_zip": {"type": "string", "description": "Destination ZIP code from the runtime job spec."},
+        "destination_label": {"type": "string", "description": "Destination city/state if present in the runtime job spec; otherwise use destination_zip."},
         "distance_miles": {"type": "number", "description": "Distance in miles between origin and destination."},
         "stair_flights": {"type": "number", "description": "Number of stair flights at the origin."},
         "inventory_items": {
@@ -167,19 +169,33 @@ def build_agent_config(
     """Render the ElevenLabs agent config (prompt + tools) for a session."""
     job = load_job_spec()
     spec = job_spec or job["job_spec"]
-    # {{ada_shield_active}} stays UNresolved here on purpose: it's an ElevenLabs
-    # runtime dynamic variable so the UI toggle controls disclosure at call time,
-    # instead of being baked into a single static agent. `ada_shield_active` only
-    # sets the placeholder DEFAULT used when no value is supplied by the client.
-    prompt = load_negotiator_prompt().replace("{job_spec_json}", json.dumps(spec, indent=2))
+    # BOTH {{job_spec_json}} and {{ada_shield_active}} stay UNresolved here on
+    # purpose: they are ElevenLabs RUNTIME dynamic variables the browser sends at
+    # startSession, so the UI controls the job spec + disclosure at call time
+    # instead of being baked into a single static agent. Critically we do NOT
+    # str.replace the job-spec placeholder — that froze Daniel's spec into the
+    # hosted prompt (the P0 bug). We only register safe DEFAULTS below (used by
+    # the ElevenLabs dashboard test tool when the client supplies nothing); the
+    # browser's live value always overrides them for a real session.
+    prompt = load_negotiator_prompt()
     return {
         "platform": "elevenlabs_agents",
         "session_id": session_id or job.get("session_id"),
         "ada_shield_active": bool(ada_shield_active),
-        # Default for the {{ada_shield_active}} runtime variable (string, lowercase
-        # to match the true/false the client SDK sends). Registered on the agent as
-        # a dynamic_variable_placeholder by configure_elevenlabs_agent.py.
-        "dynamic_variables": {"ada_shield_active": str(bool(ada_shield_active)).lower()},
+        # Defaults for the runtime variables. Strings/JSON-string only (ElevenLabs
+        # dynamic variables are scalar). ada_shield_active is lowercase to match
+        # the true/false the client SDK sends; job_spec_json is a single compact
+        # JSON string (NOT indented, NOT double-serialized) matching the browser's
+        # JSON.stringify(spec). Registered as dynamic_variable_placeholders by
+        # configure_elevenlabs_agent.py.
+        "dynamic_variables": {
+            "ada_shield_active": str(bool(ada_shield_active)).lower(),
+            "job_spec_json": json.dumps(spec),
+            # {{session_id}} lets the agent pass the live session to
+            # log_competitor_quote so cross-call leverage persists on the right
+            # session. Default is the fixture id; the browser overrides it.
+            "session_id": str(session_id or job.get("session_id") or ""),
+        },
         "system_prompt": prompt,
         "tools": TOOL_SCHEMAS,
         "first_message": (
