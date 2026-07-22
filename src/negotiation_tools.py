@@ -149,11 +149,64 @@ def get_price_benchmark(vertical: str, job_spec: dict[str, Any]) -> dict[str, An
 # --------------------------------------------------------------------------- #
 
 
+QUOTE_STATUS_VALUES = ("complete", "incomplete", "uncertain", "estimated")
+FEE_STATUS_VALUES = (
+    "included",
+    "additional_amount_known",
+    "additional_amount_unknown",
+    "excluded",
+    "not_applicable",
+    "unknown",
+    "unknown_due_to_refusal",
+)
+
+
+def valid_fee_keys(domain: Optional[dict[str, Any]] = None) -> tuple[str, ...]:
+    """The configured vertical's fee taxonomy (config/domain_config.json)."""
+    domain = domain or load_domain_config()
+    return tuple(domain.get("fee_line_items", []))
+
+
+def _validate_fee_items(items: Optional[dict[str, Any]], domain: dict[str, Any]) -> dict[str, float]:
+    """Keep only fee keys that exist in the configured vertical taxonomy.
+
+    Off-taxonomy keys are dropped rather than stored, so a live quote can never
+    smuggle in an unrecognized fee line. Values are rounded to cents.
+    """
+    allowed = set(valid_fee_keys(domain))
+    return {k: _round2(v) for k, v in (items or {}).items() if k in allowed and v is not None}
+
+
+def quote_is_itemized(logged_quote: dict[str, Any]) -> bool:
+    """A quote counts as itemized ONLY when meaningful vendor-stated line-item
+    amounts were captured. A system estimate (line_items_source == 'estimated')
+    never qualifies, no matter how many estimated lines it carries."""
+    return (
+        logged_quote.get("line_items_source") == "vendor_stated"
+        and bool(logged_quote.get("fee_line_items"))
+    )
+
+
 def log_competitor_quote(session_id: str, quote: dict[str, Any]) -> dict[str, Any]:
     """
-    Record a confirmed competing quote as a structured, fee-itemized object.
-    `quote` requires at least {company, total}; line_items are derived if absent.
-    Only quotes logged here may later be cited as leverage.
+    Record a competing quote as a structured object, keeping system estimates
+    strictly separate from dispatcher-stated numbers. `quote` requires at least
+    {company, total}. Only quotes logged here may later be cited as leverage.
+
+    Fee data integrity:
+      - `fee_line_items` holds ONLY amounts the dispatcher actually stated (what
+        the agent passed in). It is NEVER auto-filled by decompose_quote, so a
+        generated estimate can never masquerade as a vendor-stated line.
+      - When no vendor line items are supplied, a system estimate is stored in the
+        separate optional field `estimated_fee_line_items` (clearly labeled), and
+        `fee_line_items` stays empty — unknown fees are never coerced to 0.
+      - `line_items_source` is "vendor_stated" only when the dispatcher's own
+        numbers were captured; otherwise "estimated".
+      - `is_itemized` (see quote_is_itemized) is True only for a real vendor-stated
+        breakdown, so an estimated quote never qualifies as ITEMIZED_QUOTE.
+      - `quote_status`, `fee_status`, and `unresolved_fees` preserve what was and
+        wasn't confirmed, so an incomplete quote is recorded honestly.
+      - Fee keys are validated against the configured vertical fee taxonomy.
     """
     if "total" not in quote:
         raise ValueError("quote must include a numeric 'total'.")
@@ -162,7 +215,21 @@ def log_competitor_quote(session_id: str, quote: dict[str, Any]) -> dict[str, An
     job_spec = quote.get("job_spec") or {}
     total = float(quote["total"])
 
-    line_items = quote.get("fee_line_items") or decompose_quote(total, job_spec, domain)
+    # Vendor-stated line items ONLY — never a fallback decomposition.
+    vendor_items = _validate_fee_items(quote.get("fee_line_items"), domain)
+    if vendor_items:
+        line_items_source = "vendor_stated"
+        # Preserve a caller-supplied estimate if present, but keep it separate.
+        estimated_items = _validate_fee_items(quote.get("estimated_fee_line_items"), domain)
+    else:
+        line_items_source = "estimated"
+        # Optional, clearly-separated estimate for internal evaluation only.
+        supplied_est = quote.get("estimated_fee_line_items")
+        estimated_items = (
+            _validate_fee_items(supplied_est, domain) if supplied_est
+            else _validate_fee_items(decompose_quote(total, job_spec, domain), domain)
+        )
+
     benchmark_total = compute_job_benchmark(job_spec, domain) if job_spec else None
     flag = (
         check_lowball_flag(total, benchmark_total)["flag"] == LOWBALL_FRAUD_RISK
@@ -170,16 +237,29 @@ def log_competitor_quote(session_id: str, quote: dict[str, Any]) -> dict[str, An
         else False
     )
 
+    # Preserve an explicit status if the agent set one; otherwise infer a safe
+    # default (a vendor-stated breakdown is "complete"; an estimate-only quote is
+    # "estimated", never silently claimed complete).
+    quote_status = quote.get("quote_status") or ("complete" if vendor_items else "estimated")
+    fee_status = quote.get("fee_status") or {}
+    unresolved_fees = quote.get("unresolved_fees") or []
+
     session = SESSIONS.get(session_id)
     logged = {
         "quote_id": f"q{len(session.logged_quotes) + 1:03d}",
         "company": quote.get("company", "unknown"),
         "source": quote.get("source", "call"),
         "total": _round2(total),
-        "fee_line_items": {k: _round2(v) for k, v in line_items.items()},
+        "fee_line_items": vendor_items,
+        "estimated_fee_line_items": estimated_items,
+        "line_items_source": line_items_source,
+        "quote_status": quote_status,
+        "fee_status": fee_status,
+        "unresolved_fees": list(unresolved_fees),
         "lowball_flagged": bool(flag),
         "citable_as_leverage": not bool(flag),
     }
+    logged["is_itemized"] = quote_is_itemized(logged)
     session.logged_quotes.append(logged)
     return {
         "logged": logged,

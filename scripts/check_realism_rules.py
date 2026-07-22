@@ -18,10 +18,11 @@ Rules enforced:
   4. The live-agent system prompt uses the ElevenLabs runtime variable
      {{ada_shield_active}} (so the UI toggle controls it at call time), not a
      value baked in at configure time.
-  5. The system prompt carries the STRICT STOP-LOOPING & FRAUD PROTOCOL: a
-     two-strike cap on breakdown asks, a benchmark-driven (LOWBALL_FRAUD_RISK)
-     fraud rapid-exit, and a two-sentence brevity ceiling. These stop the agent
-     looping / haggling a scam quote on a live call.
+  5. The system prompt carries the STRICT STOP-LOOPING & FRAUD PROTOCOL: fee
+     clarification is bounded by information sufficiency / the QUOTE_READY gate
+     (NOT a fixed turn count), a benchmark-driven (LOWBALL_FRAUD_RISK) fraud
+     rapid-exit, and a two-sentence brevity ceiling. These stop the agent looping
+     / haggling a scam quote on a live call.
 
 Usage:
     python scripts/check_realism_rules.py
@@ -113,8 +114,11 @@ def check() -> int:
     # --- Rule 5: STRICT STOP-LOOPING & FRAUD PROTOCOL is present in the prompt. -
     protocol_anchors = {
         "protocol header": "STOP-LOOPING & FRAUD PROTOCOL",
-        "two-strike cap": "twice",              # never ask for the breakdown more than twice
-        # Rapid-exit is now benchmark-driven, not a fixed dollar cutoff tied to the
+        # Fee clarification is now bounded by information sufficiency + the
+        # QUOTE_READY gate, NOT a fixed "ask at most twice" turn count.
+        "sufficiency-bounded clarification": "QUOTE_READY",
+        "information-sufficiency framing": "sufficiency",
+        # Rapid-exit is benchmark-driven, not a fixed dollar cutoff tied to the
         # original Daniel job: the scam test is a LOWBALL_FRAUD_RISK on this job's benchmark.
         "benchmark-driven fraud floor": "LOWBALL_FRAUD_RISK",
         "brevity ceiling": "two sentences",

@@ -69,10 +69,11 @@ _JOB_SPEC_SCHEMA = {
 _FEE_LINE_ITEMS_SCHEMA = {
     "type": "object",
     "description": (
-        "The quote broken into named fee line items in dollars. Enter only amounts the "
-        "dispatcher actually stated; use 0 ONLY for a fee explicitly quoted as $0 or waived. "
-        "Do NOT invent a 0 for a fee that was never mentioned — leave those unconfirmed fees "
-        "out and treat the quote as incomplete rather than fabricating a number."
+        "VENDOR-STATED fee line items in dollars — ONLY amounts the dispatcher actually stated "
+        "or confirmed. Use 0 ONLY for a fee the dispatcher explicitly quoted as $0 or waived. "
+        "Do NOT invent a 0 for a fee that was never mentioned, and do NOT put system estimates "
+        "here — leave unconfirmed fees out (list them in unresolved_fees) and mark the quote "
+        "incomplete. A quote counts as itemized only when real vendor-stated amounts are captured."
     ),
     "properties": {
         "base_labor_fee": {"type": "number", "description": "Base labor fee in dollars."},
@@ -113,9 +114,31 @@ TOOL_SCHEMAS = [
                         "company": {"type": "string", "description": "The moving company's name."},
                         "total": {
                             "type": "number",
-                            "description": "The final all-in quoted total in dollars. REQUIRED — never omit this.",
+                            "description": "The realistic payable total in dollars. REQUIRED — never omit this.",
                         },
                         "fee_line_items": _FEE_LINE_ITEMS_SCHEMA,
+                        "quote_status": {
+                            "type": "string",
+                            "enum": ["complete", "incomplete", "uncertain"],
+                            "description": (
+                                "'complete' ONLY for a dispatcher-confirmed all-in price; use "
+                                "'incomplete' or 'uncertain' when material fees stayed unresolved. "
+                                "An incomplete quote must never be reported as fully itemized."
+                            ),
+                        },
+                        "unresolved_fees": {
+                            "type": "array",
+                            "items": {"type": "string", "description": "A fee left unresolved on the call, e.g. 'long_carry_fee'."},
+                            "description": "Material fees that were not confirmed (unknown / refused). Never enter these as 0.",
+                        },
+                        "fee_status": {
+                            "type": "object",
+                            "description": (
+                                "Per-fee status map, each one of: included, additional_amount_known, "
+                                "additional_amount_unknown, excluded, not_applicable, unknown, "
+                                "unknown_due_to_refusal. Preserves what was and wasn't confirmed."
+                            ),
+                        },
                         "job_spec": _JOB_SPEC_SCHEMA,
                         "source": {"type": "string", "description": "Where the quote came from, e.g. 'call'."},
                     },

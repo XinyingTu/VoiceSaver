@@ -20,7 +20,11 @@ function FeeBreakdown({ fees }) {
         {Object.keys(FEE_LABEL).map((k) => (
           <tr key={k} className="border-b border-edge/60 last:border-0">
             <td className="py-1 text-muted">{FEE_LABEL[k]}</td>
-            <td className="py-1 text-right font-mono text-body">{money(fees[k] ?? 0)}</td>
+            {/* A fee the dispatcher never stated is unknown, NOT $0 — render a
+                neutral dash so an unconfirmed line is never shown as free. */}
+            <td className="py-1 text-right font-mono text-body">
+              {fees[k] == null ? <span className="text-muted" title="Not stated by the dispatcher">—</span> : money(fees[k])}
+            </td>
           </tr>
         ))}
       </tbody>
